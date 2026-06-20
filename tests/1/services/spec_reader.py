@@ -59,15 +59,8 @@ def _ocr_image(path: str) -> str:
     if w < 1500:
         scale = 1500 / w
         img = img.resize((int(w * scale), int(h * scale)))
-    cfg = r"--oem 1 --psm 3"
-    
-     
-    result = pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
-
-    with open('result4.txt', 'w', encoding='utf-8') as f:
-        f.write(result)
-
-    return result
+    cfg = r"--oem 3 --psm 6"
+    return pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
 
 
 def _ocr_pdf(path: str) -> str:
