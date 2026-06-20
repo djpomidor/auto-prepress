@@ -1,0 +1,17 @@
+{
+  "db_path": "E:\\MyDocs\\projects\\auto_prepress\\v1.0\\impo_reader.db",
+  "db_type": "sqlite",
+  "pg_dsn": "postgresql://user:pass@localhost/impo_reader",
+  "orders_root": "P:\\\\",
+  "preps_templates": [
+    "P:\\\\Preps\\\\Templates",
+    "\\\\\\\\NAS-PREPRESS\\\\Archives\\\\!!!_Preps_Templates"
+  ],
+  "pitstop_in": "D:\\\\Pitstop_\\\\out",
+  "pitstop_log": "D:\\\\Pitstop_\\\\Log",
+  "ollama_url": "http://localhost:11434/api/generate",
+  "ollama_model": "qwen2-vl:7b",
+  "theme": "light",
+  "window_width": 1400,
+  "window_height": 860
+}
