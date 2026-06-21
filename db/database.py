@@ -1,3 +1,4 @@
+import os
 """
 Менеджер соединения с БД.
 Переключение SQLite ↔ PostgreSQL через config.py
@@ -13,8 +14,11 @@ def _make_engine():
     if cfg["db_type"] == "postgresql":
         url = cfg["pg_dsn"]
     else:
-        path = cfg["db_path"].replace("\\", "/")
-        url = f"sqlite:///{path}"
+        # Всегда рядом с main.py
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(base_dir, "impo_reader.db")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        url = "sqlite:///" + db_path.replace("\\", "/")
     return create_engine(url, echo=False)
 
 
