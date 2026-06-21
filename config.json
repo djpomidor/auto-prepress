@@ -9,8 +9,8 @@
   ],
   "pitstop_in": "D:\\\\Pitstop_\\\\out",
   "pitstop_log": "D:\\\\Pitstop_\\\\Log",
-  "ollama_url": "http://localhost:5757/ollama",
-  "ollama_model": "qwen2-vl:7b",
+  "ollama_url": "http://localhost:11434/api/generate",
+  "ollama_model": "qwen2.5vl:7b",
   "theme": "light",
   "window_width": 1400,
   "window_height": 860

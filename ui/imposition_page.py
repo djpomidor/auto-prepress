@@ -1,6 +1,5 @@
 """
 Страница спуска полос.
-Перенесена логика из impo_reader.html.
 """
 import customtkinter as ctk
 import tkinter as tk
@@ -8,6 +7,7 @@ from tkinter import filedialog
 import threading
 import base64
 import json
+import os
 
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
@@ -25,7 +25,7 @@ WARNING  = "#ffaa33"
 
 
 class ImpositionPage(ctk.CTkFrame):
-    def __init__(self, parent, app, order_id: int, **kwargs):
+    def __init__(self, parent, app, order_id: int = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.app = app
         self.order_id = order_id
@@ -34,23 +34,26 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._build()
 
+    # ── LAYOUT ────────────────────────────────────────────────────
     def _build(self):
-        self.grid_columnconfigure(0, weight=0, minsize=300)
+        self.grid_columnconfigure(0, weight=0, minsize=310)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         # ── Левая панель ──────────────────────────────────────────
         left = ctk.CTkScrollableFrame(
-            self, fg_color=DARK_SF, corner_radius=0, width=300
+            self, fg_color=DARK_SF, corner_radius=0, width=310
         )
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
 
-        # Загрузка фото
-        _lbl = lambda t: ctk.CTkLabel(
-            left, text=t, font=("JetBrains Mono", 9),
-            text_color=TEXT3, anchor="w"
-        )
-        _lbl("ФОТО СПУСКА").pack(anchor="w", padx=16, pady=(16, 6))
+        def lbl(t):
+            return ctk.CTkLabel(
+                left, text=t,
+                font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+            )
+
+        # ── Фото ──────────────────────────────────────────────────
+        lbl("ФОТО СПУСКА").pack(anchor="w", padx=16, pady=(16, 6))
 
         self.photo_zone = ctk.CTkFrame(
             left, fg_color=DARK_SF2, corner_radius=6,
@@ -58,21 +61,23 @@ class ImpositionPage(ctk.CTkFrame):
         )
         self.photo_zone.pack(fill="x", padx=16)
         self.photo_zone.pack_propagate(False)
-        ctk.CTkLabel(
+        self._drop_lbl = ctk.CTkLabel(
             self.photo_zone,
             text="Нажмите или перетащите JPG",
             font=("JetBrains Mono", 11), text_color=TEXT3
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        )
+        self._drop_lbl.place(relx=0.5, rely=0.5, anchor="center")
         self.photo_zone.bind("<Button-1>", lambda _: self._pick_photo())
+        self._drop_lbl.bind("<Button-1>", lambda _: self._pick_photo())
 
         # Превью фото
-        self.photo_lbl = ctk.CTkLabel(left, text="", image=None)
-        self.photo_lbl.pack(padx=16, pady=(8, 0))
+        self.photo_preview = ctk.CTkLabel(left, text="", image=None)
+        self.photo_preview.pack(padx=16, pady=(6, 0))
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=12)
+        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
 
-        # Параметры сетки
-        _lbl("ПАРАМЕТРЫ СЕТКИ").pack(anchor="w", padx=16, pady=(0, 6))
+        # ── Сетка ─────────────────────────────────────────────────
+        lbl("ПАРАМЕТРЫ СЕТКИ").pack(anchor="w", padx=16, pady=(0, 6))
         grid_f = ctk.CTkFrame(left, fg_color="transparent")
         grid_f.pack(fill="x", padx=16)
         grid_f.columnconfigure(1, weight=1)
@@ -81,15 +86,18 @@ class ImpositionPage(ctk.CTkFrame):
         self.v_cols = tk.StringVar(value="4")
         self.v_two  = tk.BooleanVar(value=True)
 
-        for row, (label, var) in enumerate([("Рядов", self.v_rows), ("Колонок", self.v_cols)]):
-            ctk.CTkLabel(grid_f, text=label, font=("JetBrains Mono", 10), text_color=TEXT3).grid(
-                row=row, column=0, sticky="w", pady=4
-            )
+        for row, (label, var) in enumerate([
+            ("Рядов",   self.v_rows),
+            ("Колонок", self.v_cols),
+        ]):
+            ctk.CTkLabel(
+                grid_f, text=label,
+                font=("JetBrains Mono", 10), text_color=TEXT3
+            ).grid(row=row, column=0, sticky="w", pady=4)
             ctk.CTkEntry(
                 grid_f, textvariable=var, width=80,
                 font=("JetBrains Mono", 12),
-                fg_color=DARK_SF2, border_color=DARK_BD2,
-                text_color=TEXT
+                fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT
             ).grid(row=row, column=1, sticky="e", pady=4)
 
         ctk.CTkCheckBox(
@@ -97,12 +105,13 @@ class ImpositionPage(ctk.CTkFrame):
             variable=self.v_two,
             font=("JetBrains Mono", 11), text_color=TEXT2,
             fg_color=ACCENT2, checkmark_color=DARK_BG,
-        ).pack(anchor="w", padx=16, pady=8)
+        ).pack(anchor="w", padx=16, pady=(6, 0))
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=4)
+        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
 
-        # Движок AI
-        _lbl("AI ДВИЖОК").pack(anchor="w", padx=16, pady=(8, 6))
+        # ── AI движок ─────────────────────────────────────────────
+        lbl("AI ДВИЖОК").pack(anchor="w", padx=16, pady=(0, 6))
+
         self.v_engine = tk.StringVar(value="ollama")
         ctk.CTkSegmentedButton(
             left, values=["ollama", "claude"],
@@ -111,11 +120,62 @@ class ImpositionPage(ctk.CTkFrame):
             selected_color=ACCENT2,
             unselected_color=DARK_SF2,
             text_color=TEXT,
+            command=self._on_engine_change,
         ).pack(fill="x", padx=16)
+
+        # ── Ollama настройки ──────────────────────────────────────
+        self.ollama_frame = ctk.CTkFrame(left, fg_color="transparent")
+        self.ollama_frame.pack(fill="x", padx=16, pady=(8, 0))
+
+        lbl2 = lambda t: ctk.CTkLabel(
+            self.ollama_frame, text=t,
+            font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+        )
+
+        lbl2("URL прокси / Ollama").pack(anchor="w", pady=(0, 2))
+        self.v_ollama_url = tk.StringVar(value="http://localhost:11434/api/generate")
+        ctk.CTkEntry(
+            self.ollama_frame, textvariable=self.v_ollama_url,
+            font=("JetBrains Mono", 11),
+            fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT,
+        ).pack(fill="x", pady=(0, 6))
+
+        lbl2("Модель").pack(anchor="w", pady=(0, 2))
+        self.v_ollama_model = tk.StringVar(value="qwen2.5vl:7b")
+        ctk.CTkEntry(
+            self.ollama_frame, textvariable=self.v_ollama_model,
+            font=("JetBrains Mono", 11),
+            fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT,
+        ).pack(fill="x", pady=(0, 6))
+
+        # Кнопка ping + статус
+        ping_row = ctk.CTkFrame(self.ollama_frame, fg_color="transparent")
+        ping_row.pack(fill="x", pady=(0, 4))
+
+        ctk.CTkButton(
+            ping_row, text="⟳ Проверить соединение",
+            font=("JetBrains Mono", 10),
+            fg_color=DARK_SF2, hover_color=DARK_BD2,
+            border_color=DARK_BD2, border_width=1,
+            text_color=TEXT2, height=28,
+            command=self._ping_ollama,
+        ).pack(side="left", fill="x", expand=True)
+
+        self._ping_dot = ctk.CTkLabel(
+            ping_row, text="●", width=20,
+            font=("Arial", 14), text_color=TEXT3
+        )
+        self._ping_dot.pack(side="left", padx=(6, 0))
+
+        self._ping_status = ctk.CTkLabel(
+            self.ollama_frame, text="Не проверено",
+            font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+        )
+        self._ping_status.pack(anchor="w")
 
         ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
 
-        # Кнопка распознать
+        # ── Кнопка распознать ─────────────────────────────────────
         self.btn_analyze = ctk.CTkButton(
             left,
             text="▶  Распознать",
@@ -125,18 +185,18 @@ class ImpositionPage(ctk.CTkFrame):
             command=self._analyze,
             state="disabled",
         )
-        self.btn_analyze.pack(fill="x", padx=16, pady=(0, 8))
+        self.btn_analyze.pack(fill="x", padx=16, pady=(0, 6))
 
         self._status_lbl = ctk.CTkLabel(
             left, text="Загрузите фото спуска",
-            font=("JetBrains Mono", 10), text_color=TEXT3
+            font=("JetBrains Mono", 10), text_color=TEXT3, wraplength=270
         )
-        self._status_lbl.pack(padx=16, pady=(0, 12))
+        self._status_lbl.pack(padx=16, pady=(0, 10))
 
         ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=4)
 
-        # Кнопки экспорта
-        _lbl("ЭКСПОРТ").pack(anchor="w", padx=16, pady=(8, 6))
+        # ── Экспорт ───────────────────────────────────────────────
+        lbl("ЭКСПОРТ").pack(anchor="w", padx=16, pady=(8, 6))
         for label, cmd in [
             ("⬇  Скачать TPL + JOB", self._export_both),
             ("↓  Только .tpl",        self._export_tpl),
@@ -147,24 +207,74 @@ class ImpositionPage(ctk.CTkFrame):
                 font=("JetBrains Mono", 11),
                 fg_color=DARK_SF2, hover_color=DARK_BD2,
                 border_color=DARK_BD2, border_width=1,
-                text_color=TEXT2, height=32,
+                text_color=TEXT2, height=30,
                 command=cmd,
-            ).pack(fill="x", padx=16, pady=3)
+            ).pack(fill="x", padx=16, pady=2)
 
-        # ── Правая панель (редактор сетки) ───────────────────────
+        # ── Правая панель ─────────────────────────────────────────
         self.right = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
         self.right.grid(row=0, column=1, sticky="nsew")
-
         self._build_empty_state()
 
+    def _on_engine_change(self, value):
+        if value == "ollama":
+            self.ollama_frame.pack(fill="x", padx=16, pady=(8, 0))
+        else:
+            self.ollama_frame.pack_forget()
+
+    # ── PING OLLAMA ───────────────────────────────────────────────
+    def _ping_ollama(self):
+        self._ping_dot.configure(text_color=WARNING)
+        self._ping_status.configure(text="Проверяю...")
+
+        def worker():
+            import requests
+            url = self.v_ollama_url.get().strip()
+            model = self.v_ollama_model.get().strip()
+
+            # Ollama API: GET /api/tags — проверяем что сервер жив
+            # Определяем базовый URL
+            base = url.replace("/api/generate", "").replace("/api/chat", "").rstrip("/")
+            try:
+                resp = requests.get(f"{base}/api/tags", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = [m["name"] for m in data.get("models", [])]
+                    if model in models:
+                        msg = f"✓ Ollama работает · {model} найдена"
+                        color = ACCENT
+                    elif models:
+                        msg = f"⚠ {model} не найдена\nДоступны: {', '.join(models[:3])}"
+                        color = WARNING
+                    else:
+                        msg = "⚠ Модели не установлены\nВыполните: ollama pull " + model
+                        color = WARNING
+                else:
+                    msg = f"✗ HTTP {resp.status_code}"
+                    color = DANGER
+            except requests.exceptions.ConnectionError:
+                msg = "✗ Ollama не запущена\nВыполните: ollama serve"
+                color = DANGER
+            except Exception as e:
+                msg = f"✗ Ошибка: {e}"
+                color = DANGER
+
+            self.after(0, lambda m=msg, c=color: self._set_ping_status(m, c))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_ping_status(self, msg: str, color: str):
+        self._ping_dot.configure(text_color=color)
+        self._ping_status.configure(text=msg, text_color=color)
+
+    # ── PHOTO ─────────────────────────────────────────────────────
     def _build_empty_state(self):
         for w in self.right.winfo_children():
             w.destroy()
         ctk.CTkLabel(
             self.right,
             text="⊟\n\nЗагрузите фото спуска\nи нажмите Распознать",
-            font=("JetBrains Mono", 14), text_color=TEXT3,
-            justify="center"
+            font=("JetBrains Mono", 14), text_color=TEXT3, justify="center"
         ).place(relx=0.5, rely=0.5, anchor="center")
 
     def _pick_photo(self):
@@ -175,16 +285,21 @@ class ImpositionPage(ctk.CTkFrame):
             self._load_photo(path)
 
     def _load_photo(self, path: str):
-        from PIL import Image, ImageTk
+        from PIL import Image
         self._img_path = path
         img = Image.open(path)
-        img.thumbnail((260, 200))
-        photo = ImageTk.PhotoImage(img)
-        self.photo_lbl.configure(image=photo, text="")
-        self.photo_lbl.image = photo
+        img.thumbnail((270, 200))
+        # Используем CTkImage — правильный способ для CustomTkinter
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+        self.photo_preview.configure(image=ctk_img, text="")
+        self.photo_preview._ctk_image = ctk_img   # держим ссылку
+        self._drop_lbl.configure(
+            text=f"✓ {os.path.basename(path)}", text_color=ACCENT
+        )
         self.btn_analyze.configure(state="normal")
         self._status_lbl.configure(text="Фото загружено")
 
+    # ── ANALYZE ───────────────────────────────────────────────────
     def _analyze(self):
         if not self._img_path:
             return
@@ -194,7 +309,7 @@ class ImpositionPage(ctk.CTkFrame):
         def worker():
             try:
                 result = self._call_ai()
-                self.after(0, lambda: self._apply_result(result))
+                self.after(0, lambda r=result: self._apply_result(r))
             except Exception as e:
                 msg = str(e)
                 self.after(0, lambda m=msg: self._on_error(m))
@@ -215,10 +330,12 @@ class ImpositionPage(ctk.CTkFrame):
             img_b64 = base64.b64encode(f.read()).decode()
 
         prompt = (
-            f"You are a prepress specialist. This is a handwritten imposition layout. "
-            f"Grid: {rows} rows x {cols} columns. "
-            f"{'Find TWO impositions (face and back).' if two else ''} "
-            f"Return ONLY valid JSON:\n"
+            f"You are a prepress specialist. This is a handwritten imposition layout for offset printing. "
+            f"Grid: {rows} rows x {cols} columns ({rows*cols} positions). "
+            f"{'Find TWO impositions: face side and back side.' if two else 'One imposition.'} "
+            f"Rows top to bottom (row 0=top). Columns left to right (col 0=left). "
+            f"Page numbers are handwritten integers. rotated=true if page is upside down. "
+            f"Return ONLY valid JSON, no markdown:\n"
             f'{{"overall_confidence":0.5,"issues":[],"sheets":['
             f'{{"side":"face","label":"Лицо","rows":{rows},"cols":{cols},'
             f'"cells":[{{"row":0,"col":0,"page":null,"rotated":false,"confident":true}}]}}'
@@ -226,28 +343,40 @@ class ImpositionPage(ctk.CTkFrame):
             f']}}'
         )
 
-        if self.v_engine.get() == "ollama":
-            import config as cfg
-            resp = requests.post(
-                cfg.CFG["ollama_url"],
-                json={"model": cfg.CFG["ollama_model"], "prompt": prompt,
-                      "images": [img_b64], "stream": False,
-                      "options": {"temperature": 0.1}},
-                timeout=120
-            )
+        engine = self.v_engine.get()
+
+        if engine == "ollama":
+            url   = self.v_ollama_url.get().strip()
+            model = self.v_ollama_model.get().strip()
+
+            # Ollama /api/generate
+            payload = {
+                "model":  model,
+                "prompt": prompt,
+                "images": [img_b64],
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 1200},
+            }
+            resp = requests.post(url, json=payload, timeout=180)
             resp.raise_for_status()
             raw = resp.json().get("response", "")
+
         else:
+            # Claude API
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
-                json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "image", "source": {"type": "base64",
-                           "media_type": "image/jpeg", "data": img_b64}},
-                          {"type": "text", "text": prompt}
-                      ]}]},
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": "image/jpeg", "data": img_b64
+                        }},
+                        {"type": "text", "text": prompt},
+                    ]}],
+                },
                 headers={"Content-Type": "application/json"},
-                timeout=60
+                timeout=60,
             )
             resp.raise_for_status()
             raw = resp.json()["content"][0]["text"]
@@ -255,61 +384,67 @@ class ImpositionPage(ctk.CTkFrame):
         raw = raw.strip().replace("```json", "").replace("```", "").strip()
         m = __import__("re").search(r"\{[\s\S]*\}", raw)
         if not m:
-            raise ValueError("JSON не найден в ответе")
+            raise ValueError("JSON не найден в ответе модели")
         return json.loads(m.group(0))
 
     def _apply_result(self, result: dict):
         self._sheets = result.get("sheets", [])
-        conf = result.get("overall_confidence", 0)
+        conf   = result.get("overall_confidence", 0)
         issues = result.get("issues", [])
+        issue_txt = f"  ⚠ {issues[0]}" if issues else ""
         self._status_lbl.configure(
-            text=f"Уверенность: {int(conf*100)}%"
-                 + (f"  ⚠ {issues[0]}" if issues else "")
+            text=f"Уверенность: {int(conf * 100)}%{issue_txt}"
         )
         self._render_grid()
 
     def _on_error(self, msg: str):
-        self._status_lbl.configure(text=f"Ошибка: {msg}")
+        self._status_lbl.configure(
+            text=f"Ошибка:\n{msg}", text_color=DANGER
+        )
 
+    # ── GRID RENDER ───────────────────────────────────────────────
     def _render_grid(self):
         for w in self.right.winfo_children():
             w.destroy()
 
-        scroll = ctk.CTkScrollableFrame(
-            self.right, fg_color="transparent"
-        )
+        scroll = ctk.CTkScrollableFrame(self.right, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=20, pady=20)
 
         for si, sheet in enumerate(self._sheets):
-            sc = "lf" if sheet["side"] == "face" else "lb"
+            # Заголовок листа
             hdr = ctk.CTkFrame(scroll, fg_color="transparent")
-            hdr.pack(anchor="w", pady=(0 if si == 0 else 16, 6))
+            hdr.pack(anchor="w", pady=(0 if si == 0 else 18, 6))
 
             ctk.CTkLabel(
-                hdr, text=f"ЛИСТ {si+1}",
+                hdr, text=f"ЛИСТ {si + 1}",
                 font=("JetBrains Mono", 11), text_color=TEXT2
             ).pack(side="left")
             ctk.CTkLabel(
-                hdr, text=f"  {sheet['label']}",
-                font=("JetBrains Mono", 10), text_color=ACCENT if sheet["side"]=="face" else INFO
+                hdr,
+                text=f"  {sheet['label']}",
+                font=("JetBrains Mono", 10),
+                text_color=ACCENT if sheet["side"] == "face" else INFO
             ).pack(side="left")
             ctk.CTkLabel(
-                hdr, text=f"  {sheet['rows']}×{sheet['cols']}",
+                hdr,
+                text=f"  {sheet['rows']}×{sheet['cols']}",
                 font=("JetBrains Mono", 10), text_color=TEXT3
             ).pack(side="left")
 
+            # Сетка
             grid_frame = ctk.CTkFrame(scroll, fg_color=DARK_SF2, corner_radius=4)
             grid_frame.pack(anchor="w")
 
-            rows, cols = sheet["rows"], sheet["cols"]
+            rows  = sheet["rows"]
+            cols  = sheet["cols"]
             cells = {(c["row"], c["col"]): c for c in sheet.get("cells", [])}
 
             for r in range(rows):
                 for c in range(cols):
-                    cd = cells.get((r, c), {})
-                    page = cd.get("page")
+                    cd        = cells.get((r, c), {})
+                    page      = cd.get("page")
                     confident = cd.get("confident", True)
-                    rotated = cd.get("rotated", False)
+                    rotated   = cd.get("rotated", False)
 
                     cell = ctk.CTkFrame(
                         grid_frame, width=70, height=52,
@@ -326,25 +461,23 @@ class ImpositionPage(ctk.CTkFrame):
                         font=("JetBrains Mono", 17, "bold"),
                         fg_color="transparent", border_width=0,
                         text_color=TEXT if confident else WARNING,
-                        justify="center"
+                        justify="center",
                     )
                     entry.place(relx=0.5, rely=0.5, anchor="center")
 
-                    # Сохраняем var для экспорта
-                    cd["_var"] = var
-                    cells[(r, c)] = cd
-
                     if rotated:
                         ctk.CTkLabel(
-                            cell, text="↻", font=("Arial", 8),
+                            cell, text="↻", font=("Arial", 9),
                             text_color=WARNING
                         ).place(relx=1.0, rely=0.0, anchor="ne", x=-2, y=2)
+
+                    cd["_var"] = var
+                    cells[(r, c)] = cd
 
             sheet["_cells_vars"] = cells
 
     # ── EXPORT ────────────────────────────────────────────────────
     def _collect_sheets(self):
-        """Собираем актуальные данные из UI полей."""
         result = []
         for sheet in self._sheets:
             cells = []
@@ -365,11 +498,11 @@ class ImpositionPage(ctk.CTkFrame):
         path = filedialog.asksaveasfilename(
             defaultextension=".tpl",
             filetypes=[("Preps Template", "*.tpl")],
-            initialfile="NewTemplate.tpl"
+            initialfile="NewTemplate.tpl",
         )
         if path:
             content = generate_tpl(sheets)
-            with open(path, "w", encoding="cp1251") as f:
+            with open(path, "w", encoding="cp1251", errors="replace") as f:
                 f.write(content)
 
     def _export_job(self):
@@ -381,7 +514,7 @@ class ImpositionPage(ctk.CTkFrame):
         )
         if path:
             content = generate_job(sheets, {})
-            with open(path, "w", encoding="cp1251") as f:
+            with open(path, "w", encoding="cp1251", errors="replace") as f:
                 f.write(content)
 
     def _export_both(self):

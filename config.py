@@ -25,8 +25,9 @@ DEFAULTS = {
     "pitstop_log": r"D:\\Pitstop_\\Log",
 
     # Ollama
-    "ollama_url":   "http://localhost:5757/ollama",
-    "ollama_model": "qwen2-vl:7b",
+    "ollama_url":   "http://localhost:11434/api/generate",
+    "ollama_model": "qwen2.5vl:7b",
+    # "ollama_model": "qwen2-vl:7b",
 
     # Тема
     "theme": "dark",
