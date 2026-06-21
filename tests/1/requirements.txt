@@ -1,9 +1,0 @@
-customtkinter>=5.2.0
-Pillow>=10.0.0
-watchdog>=3.0.0
-SQLAlchemy>=2.0.0
-requests>=2.31.0
-pytesseract>=0.3.10
-pdf2image>=1.16.3
-# Опционально для drag-and-drop:
-# tkinterdnd2>=0.3.0
