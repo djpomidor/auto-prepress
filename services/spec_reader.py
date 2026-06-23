@@ -85,7 +85,9 @@ def _read_pdf_text(path: str) -> str:
 def _ocr_image(path: str) -> str:
     """OCR для JPG/PNG через Tesseract."""
     try:
+        print("11111")
         import pytesseract
+        print("222222")
         from PIL import Image
     except ImportError:
         raise RuntimeError(

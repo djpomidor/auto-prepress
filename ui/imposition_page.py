@@ -23,7 +23,6 @@ DANGER   = "#ff5555"
 INFO     = "#55aaff"
 WARNING  = "#ffaa33"
 
-
 class ImpositionPage(ctk.CTkFrame):
     def __init__(self, parent, app, order_id: int = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
@@ -42,22 +41,22 @@ class ImpositionPage(ctk.CTkFrame):
 
         # ── Левая панель ──────────────────────────────────────────
         left = ctk.CTkScrollableFrame(
-            self, fg_color=DARK_SF, corner_radius=0, width=310
+            self, fg_color=("gray90","gray17"), corner_radius=0, width=310
         )
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
 
         def lbl(t):
             return ctk.CTkLabel(
                 left, text=t,
-                font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+                font=("JetBrains Mono", 9), text_color=("gray40","gray60"), anchor="w"
             )
 
         # ── Фото ──────────────────────────────────────────────────
         lbl("ФОТО СПУСКА").pack(anchor="w", padx=16, pady=(16, 6))
 
         self.photo_zone = ctk.CTkFrame(
-            left, fg_color=DARK_SF2, corner_radius=6,
-            border_width=1, border_color=DARK_BD2, height=80
+            left, fg_color=("gray85","gray20"), corner_radius=6,
+            border_width=1,  height=80
         )
         self.photo_zone.pack(fill="x", padx=16)
         self.photo_zone.pack_propagate(False)
@@ -74,7 +73,7 @@ class ImpositionPage(ctk.CTkFrame):
         self.photo_preview = ctk.CTkLabel(left, text="", image=None)
         self.photo_preview.pack(padx=16, pady=(6, 0))
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=10)
 
         # ── Сетка ─────────────────────────────────────────────────
         lbl("ПАРАМЕТРЫ СЕТКИ").pack(anchor="w", padx=16, pady=(0, 6))
@@ -97,17 +96,17 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkEntry(
                 grid_f, textvariable=var, width=80,
                 font=("JetBrains Mono", 12),
-                fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT
+                fg_color=("gray85","gray20"),  text_color=TEXT
             ).grid(row=row, column=1, sticky="e", pady=4)
 
         ctk.CTkCheckBox(
             left, text="Два спуска (лицо + оборот)",
             variable=self.v_two,
-            font=("JetBrains Mono", 11), text_color=TEXT2,
+            font=("JetBrains Mono", 11), 
             fg_color=ACCENT2, checkmark_color=DARK_BG,
         ).pack(anchor="w", padx=16, pady=(6, 0))
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=10)
 
         # ── AI движок ─────────────────────────────────────────────
         lbl("AI ДВИЖОК").pack(anchor="w", padx=16, pady=(0, 6))
@@ -119,7 +118,7 @@ class ImpositionPage(ctk.CTkFrame):
             font=("JetBrains Mono", 10),
             selected_color=ACCENT2,
             unselected_color=DARK_SF2,
-            text_color=TEXT,
+            
             command=self._on_engine_change,
         ).pack(fill="x", padx=16)
 
@@ -129,7 +128,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         lbl2 = lambda t: ctk.CTkLabel(
             self.ollama_frame, text=t,
-            font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+            font=("JetBrains Mono", 9), text_color=("gray40","gray60"), anchor="w"
         )
 
         lbl2("URL прокси / Ollama").pack(anchor="w", pady=(0, 2))
@@ -137,16 +136,35 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkEntry(
             self.ollama_frame, textvariable=self.v_ollama_url,
             font=("JetBrains Mono", 11),
-            fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT,
+            fg_color=("gray85","gray20"),  
         ).pack(fill="x", pady=(0, 6))
 
+        # lbl2("Модель").pack(anchor="w", pady=(0, 2))
+        # self.v_ollama_model = tk.StringVar(value="qwen2-vl:7b")
+        # ctk.CTkEntry(
+        #     self.ollama_frame, textvariable=self.v_ollama_model,
+        #     font=("JetBrains Mono", 11),
+        #     fg_color=("gray85","gray20"),  
+        # ).pack(fill="x", pady=(0, 6))
+
+#######################################################################################
         lbl2("Модель").pack(anchor="w", pady=(0, 2))
-        self.v_ollama_model = tk.StringVar(value="qwen2.5vl:7b")
-        ctk.CTkEntry(
-            self.ollama_frame, textvariable=self.v_ollama_model,
+        self.v_ollama_model = tk.StringVar(value="qwen2-vl:7b")
+        
+        # Заменяем CTkEntry на CTkComboBox
+        ctk.CTkComboBox(
+            self.ollama_frame, 
+            variable=self.v_ollama_model,               # Передает и принимает значение
+            values=["qwen2-vl:7b", "qwen2.5vl:7b", "qwen2:latest", "llava:7b"], # Список вариантов
             font=("JetBrains Mono", 11),
-            fg_color=DARK_SF2, border_color=DARK_BD2, text_color=TEXT,
+            dropdown_font=("JetBrains Mono", 11),       # Шрифт для выпадающего списка
+            fg_color=("gray85","gray20"),
         ).pack(fill="x", pady=(0, 6))
+
+
+
+#######################################################################################
+
 
         # Кнопка ping + статус
         ping_row = ctk.CTkFrame(self.ollama_frame, fg_color="transparent")
@@ -155,9 +173,9 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             ping_row, text="⟳ Проверить соединение",
             font=("JetBrains Mono", 10),
-            fg_color=DARK_SF2, hover_color=DARK_BD2,
-            border_color=DARK_BD2, border_width=1,
-            text_color=TEXT2, height=28,
+            fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+             border_width=1,
+             height=28,
             command=self._ping_ollama,
         ).pack(side="left", fill="x", expand=True)
 
@@ -169,11 +187,11 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._ping_status = ctk.CTkLabel(
             self.ollama_frame, text="Не проверено",
-            font=("JetBrains Mono", 9), text_color=TEXT3, anchor="w"
+            font=("JetBrains Mono", 9), text_color=("gray40","gray60"), anchor="w"
         )
         self._ping_status.pack(anchor="w")
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=10)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=10)
 
         # ── Кнопка распознать ─────────────────────────────────────
         self.btn_analyze = ctk.CTkButton(
@@ -189,11 +207,11 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._status_lbl = ctk.CTkLabel(
             left, text="Загрузите фото спуска",
-            font=("JetBrains Mono", 10), text_color=TEXT3, wraplength=270
+            font=("JetBrains Mono", 10), text_color=("gray40","gray60"), wraplength=270
         )
         self._status_lbl.pack(padx=16, pady=(0, 10))
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=4)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=4)
 
         # ── Экспорт ───────────────────────────────────────────────
         lbl("ЭКСПОРТ").pack(anchor="w", padx=16, pady=(8, 6))
@@ -205,14 +223,14 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkButton(
                 left, text=label,
                 font=("JetBrains Mono", 11),
-                fg_color=DARK_SF2, hover_color=DARK_BD2,
-                border_color=DARK_BD2, border_width=1,
-                text_color=TEXT2, height=30,
+                fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+                 border_width=1,
+                 height=30,
                 command=cmd,
             ).pack(fill="x", padx=16, pady=2)
 
         # ── Правая панель ─────────────────────────────────────────
-        self.right = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
+        self.right = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         self.right.grid(row=0, column=1, sticky="nsew")
         self._build_empty_state()
 
@@ -274,7 +292,7 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkLabel(
             self.right,
             text="⊟\n\nЗагрузите фото спуска\nи нажмите Распознать",
-            font=("JetBrains Mono", 14), text_color=TEXT3, justify="center"
+            font=("JetBrains Mono", 14), text_color=("gray40","gray60"), justify="center"
         ).place(relx=0.5, rely=0.5, anchor="center")
 
     def _pick_photo(self):
@@ -432,7 +450,7 @@ class ImpositionPage(ctk.CTkFrame):
             ).pack(side="left")
 
             # Сетка
-            grid_frame = ctk.CTkFrame(scroll, fg_color=DARK_SF2, corner_radius=4)
+            grid_frame = ctk.CTkFrame(scroll, fg_color=("gray85","gray20"), corner_radius=4)
             grid_frame.pack(anchor="w")
 
             rows  = sheet["rows"]
@@ -448,7 +466,7 @@ class ImpositionPage(ctk.CTkFrame):
 
                     cell = ctk.CTkFrame(
                         grid_frame, width=70, height=52,
-                        fg_color=DARK_SF,
+                        fg_color=("gray90","gray17"),
                         border_color=WARNING if not confident else DARK_BD2,
                         border_width=1, corner_radius=2
                     )

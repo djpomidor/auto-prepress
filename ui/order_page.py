@@ -30,7 +30,7 @@ WARNING  = "#ffaa33"
 def _label(parent, text, **kw):
     return ctk.CTkLabel(
         parent, text=text,
-        font=("JetBrains Mono", 10), text_color=TEXT3,
+        font=("JetBrains Mono", 10), text_color=("gray40","gray60"),
         anchor="w", **kw
     )
 
@@ -38,8 +38,8 @@ def _entry(parent, var, width=200, **kw):
     return ctk.CTkEntry(
         parent, textvariable=var,
         font=("JetBrains Mono", 13),
-        fg_color=DARK_SF2, border_color=DARK_BD2, border_width=1,
-        text_color=TEXT, width=width, **kw
+        fg_color=("gray85","gray20"),  border_width=1,
+         width=width, **kw
     )
 
 
@@ -77,7 +77,7 @@ class OrderPage(ctk.CTkFrame):
 
         # ── Левая колонка ─────────────────────────────────────────
         left = ctk.CTkScrollableFrame(
-            self, fg_color=DARK_SF, corner_radius=0,
+            self, fg_color=("gray90","gray17"), corner_radius=0,
             scrollbar_button_color=DARK_BD,
         )
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
@@ -85,7 +85,7 @@ class OrderPage(ctk.CTkFrame):
         # Drag-and-drop зона спецификации
         self._build_drop_zone(left)
 
-        ctk.CTkFrame(left, fg_color=DARK_BD, height=1).pack(fill="x", pady=12)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=12)
 
         # Форма заказа
         self._build_form(left)
@@ -94,7 +94,7 @@ class OrderPage(ctk.CTkFrame):
         self._build_action_buttons(left)
 
         # ── Правая колонка ────────────────────────────────────────
-        right = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
+        right = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         right.grid(row=0, column=1, sticky="nsew")
         right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
@@ -113,8 +113,8 @@ class OrderPage(ctk.CTkFrame):
         _label(sec, "СПЕЦИФИКАЦИЯ ЗАКАЗА").pack(anchor="w", pady=(0, 6))
 
         self.drop_zone = ctk.CTkFrame(
-            sec, fg_color=DARK_SF2, corner_radius=6,
-            border_width=1, border_color=DARK_BD2, height=90
+            sec, fg_color=("gray85","gray20"), corner_radius=6,
+            border_width=1,  height=90
         )
         self.drop_zone.pack(fill="x")
         self.drop_zone.pack_propagate(False)
@@ -124,7 +124,7 @@ class OrderPage(ctk.CTkFrame):
             text="Перетащите PDF или JPG спецификации сюда\n"
                  "или нажмите для выбора файла",
             font=("JetBrains Mono", 11),
-            text_color=TEXT3, justify="center"
+            text_color=("gray40","gray60"), justify="center"
         )
         self.drop_lbl.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -142,7 +142,7 @@ class OrderPage(ctk.CTkFrame):
         # Прогресс OCR
         self._ocr_progress = ctk.CTkProgressBar(
             sec, mode="indeterminate",
-            fg_color=DARK_BD, progress_color=ACCENT,
+            fg_color=("gray80","gray25"), progress_color=ACCENT,
         )
 
         self._ocr_status = ctk.CTkLabel(
@@ -176,8 +176,8 @@ class OrderPage(ctk.CTkFrame):
                 sec, textvariable=var,
                 placeholder_text=hint,
                 font=("JetBrains Mono", 13),
-                fg_color=DARK_SF2, border_color=DARK_BD2, border_width=1,
-                text_color=TEXT,
+                fg_color=("gray85","gray20"),  border_width=1,
+                
             )
             e.grid(row=row, column=1, sticky="ew", pady=5)
 
@@ -210,20 +210,20 @@ class OrderPage(ctk.CTkFrame):
             btn_frame,
             text="⊞  Сделать спуск полос",
             font=("JetBrains Mono", 12),
-            fg_color=DARK_SF2, hover_color=DARK_BD2,
-            border_color=DARK_BD2, border_width=1,
-            text_color=TEXT, height=36,
+            fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+             border_width=1,
+             height=36,
             command=self._open_imposition,
         )
 
     # ── PITSTOP PANEL ─────────────────────────────────────────────
     def _build_pitstop_panel(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=DARK_SF, corner_radius=0)
+        frame = ctk.CTkFrame(parent, fg_color=("gray90","gray17"), corner_radius=0)
         frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         frame.grid_rowconfigure(1, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
-        hdr = ctk.CTkFrame(frame, fg_color=DARK_SF2, height=36, corner_radius=0)
+        hdr = ctk.CTkFrame(frame, fg_color=("gray85","gray20"), height=36, corner_radius=0)
         hdr.grid(row=0, column=0, sticky="ew")
         hdr.grid_propagate(False)
 
@@ -234,12 +234,12 @@ class OrderPage(ctk.CTkFrame):
         ctk.CTkButton(
             hdr, text="↺ Обновить", width=90, height=24,
             font=("JetBrains Mono", 10),
-            fg_color=DARK_BD, hover_color=DARK_BD2,
-            text_color=TEXT2, command=self._refresh_pitstop
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+             command=self._refresh_pitstop
         ).pack(side="right", padx=10, pady=6)
 
         self.pitstop_text = ctk.CTkTextbox(
-            frame, fg_color=DARK_BG, text_color=TEXT2,
+            frame, fg_color="transparent", 
             font=("JetBrains Mono", 11),
             corner_radius=0, border_width=0,
             state="disabled",
@@ -475,8 +475,8 @@ class OrderPage(ctk.CTkFrame):
         else:
             self.btn_monitor.configure(
                 text="○  Мониторинг ВЫКЛ  (нажать — включить)",
-                fg_color=DARK_SF2, hover_color=DARK_BD2,
-                border_color=DARK_BD2, border_width=1,
+                fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+                 border_width=1,
                 text_color=TEXT2
             )
         self.btn_monitor.pack(fill="x", pady=(0, 8))

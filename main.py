@@ -5,14 +5,19 @@ ImpoReader Desktop v1.0
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
 import customtkinter as ctk
-from ui.app import App
-
+import config
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("dark")
+    # Читаем тему из конфига — не хардкодим "dark"
+    theme = config.CFG.get("theme", "dark")
+    ctk.set_appearance_mode(theme)
     ctk.set_default_color_theme("green")
+
+    from ui.app import App
     app = App()
     app.mainloop()

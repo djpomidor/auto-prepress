@@ -64,8 +64,9 @@ qwen2-vl:7b
 qwen2.5vl:7b
 qwen2:latest
 
-1. Cделай чтобы в хлебных крошках отображался номер заказа (number), а не его id.
-2. У меня есть веб-приложение "Printery"на jungo + react. Вот его models.py:
+Cделай чтобы в хлебных крошках отображался номер заказа (number), а не его id.
+У меня есть веб-приложение на jungo + react.
+models:
 
 from django.contrib.auth.models import AbstractUser
 from phonenumber_field.modelfields import PhoneNumberField
@@ -94,6 +95,11 @@ class User(AbstractUser):
     def __str__(self):
         return f"{self.username}"
 
+# class Employee(models.Model):
+#     middle_name = models.CharField(max_length=64)
+#     position = models.CharField(max_length=64)
+#     def __str__(self):
+#         return f"{self.first_name}"
 
 #########################################################################
 
@@ -154,7 +160,21 @@ class Paper(models.Model):
 
     def __str__(self):
         return f"{self.name} {self.get_type_display()} {self.density} gr/m2"
+    
+    # class Meta:
+    #     unique_together = ('name', 'type', 'density', 'width', 'height')
 
+    # def serialize(self):
+    #     return {
+    #         "name": self.name,
+    #         "type": self.type,
+    #         "density": self.density,
+    #         "width": self.width,
+    #         "height": self.height,
+    #         # "manufacturer": self.manufacturer
+    #     }
+
+###########################################################################
 
 class Order(models.Model):
     def counter():
@@ -205,6 +225,41 @@ class Order(models.Model):
     submiting_files = models.DateTimeField(null=True, blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
 
+#    def __str__(self):
+#        return f"{self.number} {self.name}"
+
+    # def serialize(self):
+    #     try:
+    #         block = Part.objects.get(order_id=self.id, part_name='BLO').serialize()
+    #     except Part.DoesNotExist:
+    #         block = ""
+    #     try:
+    #         cover = Part.objects.get(order_id=self.id, part_name='COV').serialize()
+    #     except Part.DoesNotExist:
+    #         cover = ""
+    #     try:
+    #         insert = Part.objects.get(order_id=self.id, part_name='INS').serialize()
+    #     except Part.DoesNotExist:
+    #         insert = "" 
+
+    #     return {
+    #         "number": self.number,
+    #         "name": self.name,
+    #         "owner": [user.last_name for user in self.owner.all()],
+    #         "type": self.get_type_display(),
+    #         "circulation": self.circulation,
+    #         "binding": self.binding,
+    #         "width": self.width,
+    #         "height": self.height,
+    #         "block": block,
+    #         "cover": cover,
+    #         "insert": insert,
+    #         "created": self.created.strftime("%b %d %Y, %I:%M %p"),
+    #         "due_date": self.due_date.strftime("%b %d %Y, %I:%M %p"),
+    #         "delivery_date": self.delivery_date.strftime("%b %d %Y, %I:%M %p")            
+    #     }
+
+######################################################################################
 
 class Part(models.Model):
     order = models.ForeignKey(Order, related_name='parts', on_delete=models.CASCADE)
@@ -236,6 +291,17 @@ class Part(models.Model):
     def __str__(self):
         return f"{self.part_name}"
     
+    # def save(self, *args, **kwargs):
+    #     is_new = not self.pk  # Determine if the instance is new by checking if it has a primary key
+    #     super().save(*args, **kwargs)  # Call the superclass's save method
+
+    #     if is_new:  # If the instance was newly created
+    #         # print("!print(locale.getlocale())  ", locale.getlocale())  
+    #         PrintSchedule.objects.create(order_part=self)
+
+###############################################################################################
+
+
 class Ctp(models.Model):
     plates = models.IntegerField(null=True, blank=True)
     plates_bad = models.IntegerField(null=True, blank=True)
@@ -280,5 +346,11 @@ class PrintSchedule(models.Model):
             # Обновляем объект без вызова повторного сохранения всей модели
             PrintSchedule.objects.filter(pk=self.pk).update(ctp=ctp_instance)
 
-Сделай что-бы impo_reader обращался и записывал в бд приложения Printery. Пока sqlite3 с возможностью в дальнейшем подключаться к удаленной Postgresql бд на VPS сервере, общей для обоих приложений.
-4. Почини Drag and drop.
+
+    # def __str__(self):
+    #     if self.day:
+    #         return f"{self.print_date} (Day): №{self.order.number}"
+    #     else:
+    #         return f"{self.print_date} (Night): №{self.order.number}"
+
+

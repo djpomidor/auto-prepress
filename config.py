@@ -30,7 +30,7 @@ DEFAULTS = {
     # "ollama_model": "qwen2-vl:7b",
 
     # Тема
-    "theme": "dark",
+    "theme": "light",
 
     # UI
     "window_width":  1400,
