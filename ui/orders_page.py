@@ -181,6 +181,13 @@ class OrdersPage(ctk.CTkFrame):
 
     def _on_double_click(self, event=None):
         sel = self.tree.selection()
-        print("%$#@!", Order)
-        if sel:
-            self.app.show_order(order_id=int(sel[0]), order_number=int(Order.number))
+        if not sel:
+            return
+        row_id = int(sel[0])
+        # iid = order.id, но нам нужен number из значений строки
+        values = self.tree.item(sel[0], "values")
+        try:
+            order_number = int(values[0])  # первая колонка = номер
+        except (IndexError, ValueError):
+            order_number = None
+        self.app.show_order(order_id=row_id, order_number=order_number)

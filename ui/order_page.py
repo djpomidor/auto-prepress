@@ -132,12 +132,8 @@ class OrderPage(ctk.CTkFrame):
         self.drop_zone.bind("<Button-1>", lambda _: self._pick_spec_file())
         self.drop_lbl.bind("<Button-1>", lambda _: self._pick_spec_file())
 
-        # Drag-and-drop (через tkinterdnd2 если установлен, иначе просто кнопка)
-        try:
-            self.drop_zone.drop_target_register("DND_Files")  # type: ignore
-            self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore
-        except Exception:
-            pass
+        # Drag-and-drop через tkinterdnd2
+        self._setup_dnd()
 
         # Прогресс OCR
         self._ocr_progress = ctk.CTkProgressBar(
@@ -292,9 +288,33 @@ class OrderPage(ctk.CTkFrame):
             self._process_spec(path)
 
     def _on_drop(self, event):
-        path = event.data.strip().strip("{}")
+        """Обработка drop события от tkinterdnd2."""
+        raw = event.data.strip()
+        # Windows возвращает пути в фигурных скобках если есть пробелы
+        # Несколько файлов разделены пробелами — берём первый
+        if raw.startswith("{"):
+            # Парсим путь в скобках: {C:/path with spaces/file.pdf}
+            import re
+            paths = re.findall(r"\{([^}]+)\}", raw)
+            if not paths:
+                paths = [raw.strip("{}")]
+        else:
+            paths = raw.split()
+        path = paths[0] if paths else ""
+        path = path.strip()
         if os.path.isfile(path):
             self._process_spec(path)
+
+
+    def _setup_dnd(self):
+        """Настройка drag-and-drop если tkinterdnd2 доступен."""
+        try:
+            self.drop_zone.drop_target_register("DND_Files")
+            self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)
+            self.drop_lbl.drop_target_register("DND_Files")
+            self.drop_lbl.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception:
+            pass  # tkinterdnd2 не установлен — работаем только через кнопку
 
     def _process_spec(self, path: str):
         self.drop_lbl.configure(
@@ -414,12 +434,31 @@ class OrderPage(ctk.CTkFrame):
 
         # Транслитерация для имени папки
         def translit(s):
-            table = str.maketrans(
-                "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя",
-                "ABVGDEEZHZIYKLMNOPRSTUFKHTSCHSHSCHYYEYUYAabvgdeezh ziyklmnoprstufkhтschshshschyyeyuya"
-            )
+            # Используем словарь, где ключ — одна буква, а значение — строка любой длины
+            trans_dict = {
+                'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 
+                'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'i', 'к': 'k', 'л': 'l', 'м': 'm', 
+                'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 
+                'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 
+                'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+                # Заглавные буквы
+                'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E', 
+                'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M', 
+                'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U', 
+                'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Shch', 
+                'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya'
+            }
+            
+            # str.maketrans отлично принимает словарь с многобуквенными значениями!
+            table = str.maketrans(trans_dict)
             s = s.translate(table)
+            
+            # Заменяем все не-буквы и не-цифры (включая пробелы) на нижнее подчеркивание
             s = re.sub(r"[^A-Za-z0-9_]", "_", s)
+            
+            # Схлопываем идущие подряд подчеркивания (чтобы не было ____)
+            s = re.sub(r"_+", "_", s)
+            
             return s[:30].strip("_")
 
         short = translit(o.name)

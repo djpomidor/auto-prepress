@@ -1,6 +1,6 @@
 {
-  "db_path": "E:\\MyDocs\\projects\\auto_prepress\\tests\\1\\impo_reader.db",
   "db_type": "sqlite",
+  "sqlite_path": "",
   "pg_dsn": "postgresql://user:pass@localhost/impo_reader",
   "orders_root": "P:\\\\",
   "preps_templates": [
@@ -13,5 +13,6 @@
   "ollama_model": "qwen2.5vl:7b",
   "theme": "light",
   "window_width": 1400,
-  "window_height": 860
+  "window_height": 860,
+  "db_path": "E:\\MyDocs\\projects\\auto_prepress\\tests\\1\\impo_reader.db"
 }

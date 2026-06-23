@@ -1,7 +1,6 @@
 """
 ImpoReader Desktop v1.0
 Запуск: python main.py
-Зависимости: pip install customtkinter pillow watchdog sqlalchemy requests
 """
 import sys
 import os
@@ -9,15 +8,42 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-import customtkinter as ctk
 import config
 
-if __name__ == "__main__":
-    # Читаем тему из конфига — не хардкодим "dark"
-    theme = config.CFG.get("theme", "dark")
-    ctk.set_appearance_mode(theme)
-    ctk.set_default_color_theme("green")
+# Применяем тему ДО создания любых окон
+import customtkinter as ctk
+theme = config.CFG.get("theme", "dark")
+ctk.set_appearance_mode(theme)
+ctk.set_default_color_theme("green")
 
-    from ui.app import App
-    app = App()
+if __name__ == "__main__":
+    try:
+        from tkinterdnd2 import TkinterDnD
+        DND_AVAILABLE = True
+    except ImportError:
+        DND_AVAILABLE = False
+
+    if DND_AVAILABLE:
+        # Встраиваем DnD в CustomTkinter
+        from ui.app import App
+
+        class AppDnD(TkinterDnD.DnDWrapper, App):
+            def __init__(self):
+                App.__init__(self)
+                self.TkdndVersion = TkinterDnD._require(self)
+
+        try:
+            app = AppDnD()
+            app._dnd_available = True
+        except Exception as e:
+            print(f"DnD init failed: {e}, falling back")
+            from ui.app import App
+            app = App()
+            app._dnd_available = False
+    else:
+        from ui.app import App
+        app = App()
+        app._dnd_available = False
+        print("Hint: pip install tkinterdnd2  — для drag-and-drop файлов")
+
     app.mainloop()

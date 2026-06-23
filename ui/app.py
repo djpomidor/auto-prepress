@@ -117,26 +117,26 @@ class App(ctk.CTk):
         self._show_page(OrdersPage, [("Заказы", None)])
 
     def show_order(self, order_id=None, order_number=None):
-        # Если передан читаемый номер, показываем его, иначе используем id или "Новый заказ"
         if order_number:
-            label = f"Заказ {order_number}"
+            label = f"Заказ №{order_number:04d}"
+        elif order_id:
+            label = f"Заказ #{order_id}"
         else:
-            label = f"Заказ #{order_id}" if order_id else "Новый заказ"
-
+            label = "Новый заказ"
         self._show_page(
             OrderPage,
             [("Заказы", self.show_orders), (label, None)],
             order_id=order_id,
-            order_number=order_number # Передаем дальше в саму страницу, если нужно
         )
 
     def show_new_order(self):
-        self.show_order(order_id=None, order_number=None)
+        self.show_order(order_id=None)
 
-    def show_imposition(self, order_id: int, order_number=None):
-        # Формируем имя ссылки для возврата на страницу заказа
-        order_label = f"Заказ {order_number}" if order_number else f"Заказ #{order_id}"
-        
+    def show_imposition(self, order_id: int, order_number: int = None):
+        if order_number:
+            order_label = f"Заказ №{order_number:04d}"
+        else:
+            order_label = f"Заказ #{order_id}"
         self._show_page(
             ImpositionPage,
             [
@@ -145,7 +145,6 @@ class App(ctk.CTk):
                 ("Спуск полос", None),
             ],
             order_id=order_id,
-            order_number=order_number # Передаем дальше в страницу спуска, если нужно
         )
 
     def _toggle_theme(self, value: str):

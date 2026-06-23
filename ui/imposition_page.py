@@ -69,6 +69,15 @@ class ImpositionPage(ctk.CTkFrame):
         self.photo_zone.bind("<Button-1>", lambda _: self._pick_photo())
         self._drop_lbl.bind("<Button-1>", lambda _: self._pick_photo())
 
+        # Drag-and-drop для фото спуска
+        try:
+            self.photo_zone.drop_target_register("DND_Files")
+            self.photo_zone.dnd_bind("<<Drop>>", self._on_photo_drop)
+            self._drop_lbl.drop_target_register("DND_Files")
+            self._drop_lbl.dnd_bind("<<Drop>>", self._on_photo_drop)
+        except Exception:
+            pass
+
         # Превью фото
         self.photo_preview = ctk.CTkLabel(left, text="", image=None)
         self.photo_preview.pack(padx=16, pady=(6, 0))
@@ -139,15 +148,6 @@ class ImpositionPage(ctk.CTkFrame):
             fg_color=("gray85","gray20"),  
         ).pack(fill="x", pady=(0, 6))
 
-        # lbl2("Модель").pack(anchor="w", pady=(0, 2))
-        # self.v_ollama_model = tk.StringVar(value="qwen2-vl:7b")
-        # ctk.CTkEntry(
-        #     self.ollama_frame, textvariable=self.v_ollama_model,
-        #     font=("JetBrains Mono", 11),
-        #     fg_color=("gray85","gray20"),  
-        # ).pack(fill="x", pady=(0, 6))
-
-#######################################################################################
         lbl2("Модель").pack(anchor="w", pady=(0, 2))
         self.v_ollama_model = tk.StringVar(value="qwen2-vl:7b")
         
@@ -160,11 +160,6 @@ class ImpositionPage(ctk.CTkFrame):
             dropdown_font=("JetBrains Mono", 11),       # Шрифт для выпадающего списка
             fg_color=("gray85","gray20"),
         ).pack(fill="x", pady=(0, 6))
-
-
-
-#######################################################################################
-
 
         # Кнопка ping + статус
         ping_row = ctk.CTkFrame(self.ollama_frame, fg_color="transparent")

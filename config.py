@@ -1,38 +1,38 @@
 """
-Конфигурация приложения.
-Все пути и настройки редактируются здесь.
+Конфигурация ImpoReader.
 """
 import os
 import json
 
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 DEFAULTS = {
-    # Базы данных
-    "db_path": os.path.join(os.path.dirname(__file__), "impo_reader.db"),
+    # ── База данных ───────────────────────────────────────────────
     "db_type": "sqlite",          # "sqlite" или "postgresql"
-    "pg_dsn": "postgresql://user:pass@localhost/impo_reader",
 
-    # Сетевые пути
+    # SQLite: путь к файлу БД Printery (если хотите общую БД)
+    # Оставьте "" чтобы создать отдельную БД рядом с main.py
+    "sqlite_path": "",
+
+    # PostgreSQL DSN (когда db_type = "postgresql")
+    # Формат: postgresql://user:password@host:5432/dbname
+    "pg_dsn": "postgresql://user:pass@localhost/printery",
+
+    # ── Пути ─────────────────────────────────────────────────────
     "orders_root": r"P:\\",
     "preps_templates": [
         r"P:\\Preps\\Templates",
         r"\\\\NAS-PREPRESS\\Archives\\!!!_Preps_Templates",
     ],
-
-    # PitStop
     "pitstop_in":  r"D:\\Pitstop_\\out",
     "pitstop_log": r"D:\\Pitstop_\\Log",
 
-    # Ollama
+    # ── Ollama ────────────────────────────────────────────────────
     "ollama_url":   "http://localhost:11434/api/generate",
-    "ollama_model": "qwen2.5vl:7b",
-    # "ollama_model": "qwen2-vl:7b",
+    "ollama_model": "qwen2-vl:7b",
 
-    # Тема
-    "theme": "light",
-
-    # UI
+    # ── UI ────────────────────────────────────────────────────────
+    "theme":         "dark",
     "window_width":  1400,
     "window_height": 860,
 }
