@@ -350,7 +350,7 @@ class OrderPage(ctk.CTkFrame):
 
         self.drop_lbl.configure(
             text=f"✓  {os.path.basename(path)}\nРаспознано. Проверьте данные.",
-            text_color=ACCENT
+            text_color=SUCCESS
         )
         self._ocr_status.configure(text=f"Источник: {path}")
 
