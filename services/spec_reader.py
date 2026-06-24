@@ -61,6 +61,9 @@ def _read_pdf_text(path: str) -> str:
                 t = page.extract_text(x_tolerance=3, y_tolerance=3)
                 if t:
                     parts.append(t)
+
+            with open('result_pdf.txt', 'w', encoding='utf-8') as f:
+                f.write("\n".join(parts))        
             return "\n".join(parts)
     except ImportError:
         pass
@@ -85,9 +88,7 @@ def _read_pdf_text(path: str) -> str:
 def _ocr_image(path: str) -> str:
     """OCR для JPG/PNG через Tesseract."""
     try:
-        print("11111")
         import pytesseract
-        print("222222")
         from PIL import Image
     except ImportError:
         raise RuntimeError(
@@ -106,9 +107,9 @@ def _ocr_image(path: str) -> str:
      
     result = pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
 
-    with open('result4.txt', 'w', encoding='utf-8') as f:
+    with open('result_jpg.txt', 'w', encoding='utf-8') as f:
         f.write(result)
-
+    print("!@!@", result) 
     return result
 
 

@@ -1,6 +1,6 @@
 """
 Парсинг XML логов PitStop Server.
-Читает папку D:\Pitstop_\Log\<order_folder>\
+Читает папку D:\\Pitstop_\\Log\<order_folder>\
 """
 import os
 import xml.etree.ElementTree as ET
