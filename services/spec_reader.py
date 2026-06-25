@@ -14,21 +14,6 @@ import os
 # ─── PUBLIC API ──────────────────────────────────────────────────
 
 def read_spec(path: str) -> dict:
-    """
-    Главная функция. Возвращает словарь:
-    {
-        number, name, client, circulation,
-        width, height,
-        pages_block, pages_cover, pages_insert,
-        color_block, color_cover, color_insert,
-        binding, laminate, laminate_type,
-        paper_block_type, paper_block_density,
-        paper_cover_type, paper_cover_density,
-        due_date, submit_date, delivery_date,
-        raw_text   (полный текст OCR для отладки)
-    }
-    Отсутствующие поля = None.
-    """
     text = _extract_text(path)
     data = _parse(text)
     data["raw_text"] = text
@@ -85,6 +70,52 @@ def _read_pdf_text(path: str) -> str:
     return ""  # ни одна библиотека не установлена — упадём в OCR
 
 
+
+
+def remove_table_borders(img_pil):
+    """
+    Убирает горизонтальные и вертикальные линии таблицы с бланка
+    перед OCR — улучшает распознавание текста в ячейках.
+    Требует: pip install opencv-python
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return img_pil  # opencv не установлен — возвращаем как есть
+
+    img = np.array(img_pil.convert("RGB"))
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+    # Адаптивная бинаризация — устойчива к неравномерному освещению
+    binary = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        15, 10
+    )
+
+    # Горизонтальные линии: ядро шириной 1/20 изображения
+    h_len = max(40, img.shape[1] // 20)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1))
+    h_lines  = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+
+    # Вертикальные линии
+    v_len = max(40, img.shape[0] // 20)
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len))
+    v_lines  = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+
+    # Маска всех линий + небольшое расширение
+    mask = cv2.add(h_lines, v_lines)
+    k    = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    mask = cv2.dilate(mask, k, iterations=1)
+
+    # Восстанавливаем фон под линиями (inpaint)
+    result = cv2.inpaint(img, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+    from PIL import Image as PILImage
+    return PILImage.fromarray(result)
+
 def _ocr_image(path: str) -> str:
     """OCR для JPG/PNG через Tesseract."""
     try:
@@ -98,20 +129,22 @@ def _ocr_image(path: str) -> str:
             "  Языковые данные: rus+eng"
         )
     img = Image.open(path)
+
+    # Масштабируем для лучшего OCR
     w, h = img.size
     if w < 1500:
         scale = 1500 / w
         img = img.resize((int(w * scale), int(h * scale)))
-    cfg = r"--oem 1 --psm 3"
-    
-     
-    result = pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
 
+    # Убираем рамки таблиц бланка — улучшает распознавание текста в ячейках
+    img = remove_table_borders(img)
+    
+    cfg = r"--oem 3 --psm 6"
+    result =  pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
     with open('result_jpg.txt', 'w', encoding='utf-8') as f:
         f.write(result)
-    print("!@!@", result) 
+    # print("!@!@", result) 
     return result
-
 
 def _ocr_pdf_scan(path: str) -> str:
     """OCR для PDF-скана: конвертируем страницу в изображение → Tesseract."""
@@ -142,6 +175,7 @@ def _parse(text: str) -> dict:
     # Нормализуем: убираем лишние пробелы, кириллические x → латинские
     text = re.sub(r"[ \t]+", " ", text)
     text = text.replace("х", "x").replace("Х", "x")
+    text = text.replace("|", "[").replace(" ", " ")
 
     # Обрезаем до "Дата в печать" включительно
     cut = re.search(r"дата\s+в\s+печать", text, re.I)

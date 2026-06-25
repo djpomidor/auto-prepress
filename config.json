@@ -11,7 +11,7 @@
   "pitstop_log": "D:\\\\Pitstop_\\\\Log",
   "ollama_url": "http://localhost:11434/api/generate",
   "ollama_model": "qwen2.5vl:7b",
-  "theme": "dark",
+  "theme": "light",
   "window_width": 1400,
   "window_height": 860,
   "db_path": "E:\\MyDocs\\projects\\auto_prepress\\tests\\1\\impo_reader.db"
