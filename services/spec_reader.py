@@ -174,8 +174,10 @@ def _ocr_pdf_scan(path: str) -> str:
 def _parse(text: str) -> dict:
     # Нормализуем: убираем лишние пробелы, кириллические x → латинские
     text = re.sub(r"[ \t]+", " ", text)
+    # text = text.replace("|", " ")
     text = text.replace("х", "x").replace("Х", "x")
-    text = text.replace("|", "[").replace(" ", " ")
+    
+
 
     # Обрезаем до "Дата в печать" включительно
     cut = re.search(r"дата\s+в\s+печать", text, re.I)
