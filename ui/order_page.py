@@ -275,6 +275,10 @@ class OrderPage(ctk.CTkFrame):
         self.btn_create.configure(text="💾  Сохранить изменения")
         self._show_order_buttons()
 
+        # Автозапуск мониторинга если был включён
+        if o.monitoring and o.folder_path:
+            self._start_monitoring(o)
+
     # ── SPEC FILE ─────────────────────────────────────────────────
     def _pick_spec_file(self):
         path = filedialog.askopenfilename(
@@ -535,41 +539,70 @@ class OrderPage(ctk.CTkFrame):
             session.close()
 
     def _start_monitoring(self, order):
-        from services.folder_monitor import FolderMonitor
-        in_path = os.path.join(order.folder_path or "", "in")
-        if not os.path.isdir(in_path):
-            print(f"[Monitor] Папка не найдена: {in_path}")
+        from services.monitor_manager import MonitorManager
+
+        folder_path = order.folder_path or ""
+        in_path     = os.path.join(folder_path, "in")
+
+        if not folder_path:
+            from tkinter import messagebox
+            messagebox.showerror("Мониторинг",
+                "folder_path пустой — сохраните заказ заново")
             return
-        folder_name = os.path.basename(order.folder_path or "")
-        self._monitor = FolderMonitor(
-            in_path=in_path,
-            order_folder_name=folder_name,
+        if not os.path.isdir(in_path):
+            from tkinter import messagebox
+            messagebox.showerror("Мониторинг",
+                f"Папка не найдена:\n{in_path}\n\nПроверьте что диск P: доступен")
+            return
+
+        MonitorManager().start_order(
+            order_id=order.id,
+            folder_path=folder_path,
             callback=self._on_new_file,
         )
-        self._monitor.start()
+
 
     def _stop_monitoring(self):
-        if hasattr(self, "_monitor"):
-            self._monitor.stop()
+        from services.monitor_manager import MonitorManager
+        if self.order:
+            MonitorManager().stop_order(self.order.id)
 
     def _on_new_file(self, path: str):
-        self.after(0, lambda: self._refresh_pitstop())
+        # Проверяем что виджет ещё существует перед обновлением
+        try:
+            if self.winfo_exists():
+                self.after(0, self._refresh_pitstop)
+        except Exception:
+            pass
 
     # ── PITSTOP ───────────────────────────────────────────────────
     def _refresh_pitstop(self):
         if not self.order or not self.order.folder_path:
             return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        import config as cfg
         from services.pitstop_parser import parse_pitstop_log
         folder_name = os.path.basename(self.order.folder_path)
-        log_dir = os.path.join(config.CFG["pitstop_log"], folder_name)
+        log_dir = os.path.join(cfg.CFG["pitstop_log"], folder_name)
         result = parse_pitstop_log(log_dir)
         self._set_pitstop_text(result)
 
     def _set_pitstop_text(self, text: str):
-        self.pitstop_text.configure(state="normal")
-        self.pitstop_text.delete("1.0", "end")
-        self.pitstop_text.insert("1.0", text)
-        self.pitstop_text.configure(state="disabled")
+        try:
+            if not self.winfo_exists():
+                return
+            if not hasattr(self, "pitstop_text"):
+                return
+            self.pitstop_text.configure(state="normal")
+            self.pitstop_text.delete("1.0", "end")
+            self.pitstop_text.insert("1.0", text)
+            self.pitstop_text.configure(state="disabled")
+        except Exception:
+            pass
 
     # ── IMPOSITION ────────────────────────────────────────────────
     def _open_imposition(self):

@@ -24,6 +24,7 @@ class App(ctk.CTk):
 
         self._current_page = None
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_header()
         self._build_breadcrumb()
 
@@ -34,6 +35,14 @@ class App(ctk.CTk):
 
         from db.database import init_db
         init_db()
+
+        # Автозапуск мониторинга всех активных заказов
+        import threading
+        def _start_monitors():
+            from services.monitor_manager import MonitorManager
+            MonitorManager().start_all(callback=None)
+        threading.Thread(target=_start_monitors, daemon=True).start()
+
         self.show_orders()
 
     def _build_header(self):
@@ -146,6 +155,12 @@ class App(ctk.CTk):
             ],
             order_id=order_id,
         )
+
+    def _on_close(self):
+        """Останавливаем все мониторы при закрытии."""
+        from services.monitor_manager import MonitorManager
+        MonitorManager().stop_all()
+        self.destroy()
 
     def _toggle_theme(self, value: str):
         self.cfg["theme"] = value

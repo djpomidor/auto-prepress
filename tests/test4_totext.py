@@ -5,7 +5,7 @@ import pytesseract
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # 1. Загрузка изображения
-img = cv2.imread('804.jpg')
+img = cv2.imread('spec/804.jpg')
 
 # 2. Удаление синих рукописных чернил (используем синий канал)
 # b, g, r = cv2.split(img)

@@ -6,7 +6,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 
 
 # 1. Загрузка и очистка изображения (как в прошлом шаге)
-img = cv2.imread('0872_Progress.jpg')
+img = cv2.imread('spec/0872_Progress.jpg')
 b, g, r = cv2.split(img)
 thresh = cv2.adaptiveThreshold(
     b, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 15
