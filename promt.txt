@@ -285,3 +285,38 @@ class PrintSchedule(models.Model):
 
 ************************************************************************
 
+1. Когда я кидаю Pdf в папку in заказа на диске P. они не копируются в папку с названием как на диске P в d:\Pitstop\Out.
+2. Если вручную перенести xml log файл пистопа в d:\Pitstop_\Log\папка заказа, то в приложении пишет: Ошибок не найдено, но они есть:
+
+<?xml version="1.0" encoding="UTF-8"?>
+<EnfocusReport version="3.0" unit="mm" xml:lang="en-US">
+  <PreflightReport errors="4" criticalfailures="0" noncriticalfailures="0" signoffs="0" fixes="0" warnings="1">
+    <Errors>
+      <PreflightReportItem ActionID="3156">
+        <Message>Spot color All is used for an element within the trim box (12x on pages 13,20-21,46,59)</Message>
+        <StringContext>
+          <BaseString>Spot color %[]SpotColorName% is used for an element within the trim box</BaseString>
+          <Var name="SpotColorName">All</Var>
+        </StringContext>
+        <Location page="13" minX="15.708" minY="6.534" maxX="156.398" maxY="231.155"/>
+        <Location page="13" minX="15.708" minY="6.534" maxX="156.398" maxY="231.155"/>
+        <Location page="20" minX="20.239" minY="2.992" maxX="165.367" maxY="234.697"/>
+        <Location page="20" minX="20.239" minY="2.992" maxX="165.367" maxY="234.697"/>
+        <Location page="21" minX="15.782" minY="6.253" maxX="156.825" maxY="231.436"/>
+        <Location page="21" minX="15.782" minY="6.253" maxX="156.825" maxY="231.436"/>
+        <Location page="46" minX="17.262" minY="4.01" maxX="171.122" maxY="249.657"/>
+        <Location page="46" minX="17.262" minY="4.01" maxX="171.122" maxY="249.657"/>
+        <Location page="59" minX="24.547" minY="86.452" maxX="136.284" maxY="89.359"/>
+        <Location page="59" minX="24.514" minY="82.483" maxX="56.842" maxY="85.231"/>
+        <Location page="59" minX="24.542" minY="77.014" maxX="136.28" maxY="79.914"/>
+        <Location page="59" minX="24.514" minY="73.046" maxX="108.394" maxY="75.952"/>
+      </PreflightReportItem>
+      <PreflightReportItem ActionID="2078">
+        <Message>RGB color is used (699x on pages 23...575)</Message>
+        <StringContext>
+          <BaseString>%ColorSpace% is used</BaseString>
+          <Var name="ColorSpace">RGB color</Var>
+        </StringContext>
+	....
+
+3. На jpg спецификаций значения стоят в ячейках с черной обводкой. Из-зи этого не корректно распознаётся, например, номер заказа. Как можно убрать эти рамки перед распознаванием?
