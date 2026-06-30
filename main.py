@@ -8,6 +8,13 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
+import logging
+# Глушим подробные логи сторонних библиотек
+for _lib in ["pdfminer", "pdfplumber", "PIL", "watchdog",
+             "pdfminer.psparser", "pdfminer.pdfinterp",
+             "pdfminer.cmapdb", "pdfminer.pdfdocument"]:
+    logging.getLogger(_lib).setLevel(logging.WARNING)
+
 import config
 
 # Применяем тему ДО создания любых окон

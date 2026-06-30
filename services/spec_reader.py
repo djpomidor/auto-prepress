@@ -1,11 +1,6 @@
 """
 Распознавание спецификации заказа.
-Бланк: "Спецификация заказа №" (типография Премиум и аналогичные).
-
-Логика:
-  PDF с текстом → читаем напрямую через pdfplumber или pymupdf (быстро, точно)
-  PDF-скан      → конвертируем в изображение → Tesseract OCR
-  JPG/PNG       → Tesseract OCR
+Поддерживает PDF (текстовый слой) и JPG/PNG (Tesseract OCR).
 """
 import re
 import os
@@ -14,8 +9,12 @@ import os
 # ─── PUBLIC API ──────────────────────────────────────────────────
 
 def read_spec(path: str) -> dict:
+    ext = os.path.splitext(path)[1].lower()
     text = _extract_text(path)
-    data = _parse(text)
+    is_pdf = (ext == ".pdf") and len(text.strip()) > 50
+    cleaned = _clean(text, is_pdf=is_pdf)
+    print(f"[Spec] Cleaned (первые 200):\n{cleaned[:200]}")
+    data = _parse(cleaned)
     data["raw_text"] = text
     return data
 
@@ -25,19 +24,21 @@ def read_spec(path: str) -> dict:
 def _extract_text(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        # Сначала пробуем прочитать текстовый слой напрямую
         text = _read_pdf_text(path)
         if text and len(text.strip()) > 50:
             return text
-        # Fallback: PDF является сканом — OCR
         return _ocr_pdf_scan(path)
     return _ocr_image(path)
 
 
 def _read_pdf_text(path: str) -> str:
-    """Читает текст напрямую из PDF без OCR. Работает если PDF не скан."""
+    import logging
+    # Глушим подробные логи pdfminer/pdfplumber
+    for noisy in ["pdfminer", "pdfplumber", "pdfminer.psparser",
+                  "pdfminer.pdfinterp", "pdfminer.cmapdb",
+                  "pdfminer.pdfdocument", "pdfminer.pdfpage"]:
+        logging.getLogger(noisy).setLevel(logging.ERROR)
 
-    # Вариант 1: pdfplumber — лучше для форм и таблиц
     try:
         import pdfplumber
         with pdfplumber.open(path) as pdf:
@@ -46,48 +47,35 @@ def _read_pdf_text(path: str) -> str:
                 t = page.extract_text(x_tolerance=3, y_tolerance=3)
                 if t:
                     parts.append(t)
-
-            with open('result_pdf.txt', 'w', encoding='utf-8') as f:
-                f.write("\n".join(parts))        
             return "\n".join(parts)
     except ImportError:
         pass
-
-    # Вариант 2: PyMuPDF
     try:
         import fitz
         doc = fitz.open(path)
-        parts = []
-        for i, page in enumerate(doc):
-            if i >= 2:
-                break
-            parts.append(page.get_text())
+        parts = [page.get_text() for i, page in enumerate(doc) if i < 2]
         doc.close()
         return "\n".join(parts)
     except ImportError:
         pass
-
-    return ""  # ни одна библиотека не установлена — упадём в OCR
-
-
+    return ""
 
 
 def remove_table_borders(img_pil):
     """
-    Убирает горизонтальные и вертикальные линии таблицы с бланка
-    перед OCR — улучшает распознавание текста в ячейках.
-    Требует: pip install opencv-python
+    Убирает линии таблицы перед OCR.
+    Использует более мягкие параметры чтобы не трогать текст в шапке.
     """
     try:
         import cv2
         import numpy as np
     except ImportError:
-        return img_pil  # opencv не установлен — возвращаем как есть
+        return img_pil
 
     img = np.array(img_pil.convert("RGB"))
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-    # Адаптивная бинаризация — устойчива к неравномерному освещению
+    # Бинаризация
     binary = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_MEAN_C,
@@ -95,67 +83,132 @@ def remove_table_borders(img_pil):
         15, 10
     )
 
-    # Горизонтальные линии: ядро шириной 1/20 изображения
-    h_len = max(40, img.shape[1] // 20)
+    # Горизонтальные линии — минимальная длина 1/15 ширины
+    # (длиннее чтобы не цеплять подчёркивания в тексте)
+    h_len = max(60, img.shape[1] // 15)
     h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1))
     h_lines  = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
 
-    # Вертикальные линии
-    v_len = max(40, img.shape[0] // 20)
+    # Вертикальные линии — минимальная высота 1/15
+    v_len = max(60, img.shape[0] // 15)
     v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len))
     v_lines  = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
 
-    # Маска всех линий + небольшое расширение
     mask = cv2.add(h_lines, v_lines)
-    k    = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+    # Небольшое расширение — убираем остатки линий
+    k    = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     mask = cv2.dilate(mask, k, iterations=1)
 
-    # Восстанавливаем фон под линиями (inpaint)
     result = cv2.inpaint(img, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
     from PIL import Image as PILImage
     return PILImage.fromarray(result)
 
+
 def _ocr_image(path: str) -> str:
-    """OCR для JPG/PNG через Tesseract."""
     try:
         import pytesseract
         from PIL import Image
     except ImportError:
         raise RuntimeError(
-            "Установите зависимости:\n"
-            "  pip install pytesseract pillow\n"
-            "  + Tesseract: https://github.com/UB-Mannheim/tesseract/wiki\n"
-            "  Языковые данные: rus+eng"
+            "pip install pytesseract pillow\n"
+            "+ Tesseract: https://github.com/UB-Mannheim/tesseract/wiki"
         )
     img = Image.open(path)
 
-    # Масштабируем для лучшего OCR
+    # Масштабируем
     w, h = img.size
-    if w < 1500:
-        scale = 1500 / w
-        img = img.resize((int(w * scale), int(h * scale)))
+    if w < 1800:
+        scale = 1800 / w
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-    # Убираем рамки таблиц бланка — улучшает распознавание текста в ячейках
-    img = remove_table_borders(img)
-    
-    cfg = r"--oem 3 --psm 6"
-    result =  pytesseract.image_to_string(img, lang="rus+eng", config=cfg)
-    with open('result_jpg.txt', 'w', encoding='utf-8') as f:
-        f.write(result)
-    # print("!@!@", result) 
-    return result
+    ocr_cfg = r"--oem 3 --psm 6"
+
+    iw, ih = img.width, img.height
+
+    # ШАГ 1: Вырезаем ТОЛЬКО ячейку с номером заказа.
+    # Структура шапки бланка по горизонтали:
+    #   0%──28%  "Спецификация заказа №"  (курсив, слева)
+    #   28%─55%  [ 883 ]                  (номер в ячейке, по центру-левее)
+    #   55%─100% ЛОГОТИП                  (мешает OCR — не читаем)
+    #
+    # Читаем всю левую часть шапки (0–55%), логотип отрезаем
+    header_crop = img.crop((0, 0, int(iw * 0.55), int(ih * 0.10)))
+    # Увеличиваем х2 для лучшего распознавания мелкого текста
+    hw, hh = header_crop.size
+    header_big = header_crop.resize((hw * 2, hh * 2), Image.LANCZOS)
+    header_text = pytesseract.image_to_string(
+        header_big, lang="rus+eng", config=ocr_cfg
+    )
+
+    # ШАГ 2: Отдельно читаем только ячейку номера (28–55%, верхние 10%)
+    # psm 8 = single word, whitelist только цифры
+    num_crop = img.crop((int(iw * 0.28), 0, int(iw * 0.55), int(ih * 0.10)))
+    nw, nh = num_crop.size
+    num_big = num_crop.resize((nw * 3, nh * 3), Image.LANCZOS)
+    # Сохраняем для отладки (оригинальный кроп без изменений)
+    _save_crop(num_big,    "num_cell.jpg")
+    _save_crop(header_big, "header_left.jpg")
+
+    # Читаем ТОЛЬКО верхнюю половину кропа — там ячейка с номером.
+    # Нижняя половина кропа может захватить строку "Заказчик" → "00001940".
+    nw2, nh2 = num_big.size
+    num_top = num_big.crop((0, 0, nw2, nh2 // 2))
+
+    num_raw = ""
+    for psm in [7, 8, 6]:
+        cfg = f"--oem 3 --psm {psm} -c tessedit_char_whitelist=0123456789"
+        for src in [num_top, num_big]:
+            result = pytesseract.image_to_string(
+                src, lang="eng", config=cfg
+            ).strip().replace(" ", "").replace("\n", "")
+            if re.fullmatch(r"\d{3,6}", result):
+                num_raw = result
+                print(f"[OCR] Ячейка номера: '{num_raw}' (psm {psm})")
+                break
+        if num_raw:
+            break
+
+    if not num_raw:
+        # Fallback — ищем первое 3-6 значное число в тексте шапки
+        nm = re.search(r"(?<![\d])([1-9]\d{2,5})(?![\d])", header_text)
+        if nm:
+            num_raw = nm.group(1)
+            print(f"[OCR] Номер из шапки: '{num_raw}'")
+        else:
+            print("[OCR] Номер не найден — см. debug/num_cell.jpg")
+
+    # ШАГ 3: Тело документа с удалением рамок
+    body_crop  = img.crop((0, int(ih * 0.08), iw, ih))
+    body_clean = remove_table_borders(body_crop)
+    body_text  = pytesseract.image_to_string(
+        body_clean, lang="rus+eng", config=ocr_cfg
+    )
+
+    # Собираем финальный текст
+    # Если число из ячейки прочиталось — подставляем явно в начало
+    import re as _re
+    if _re.fullmatch(r"\d{3,6}", num_raw):
+        number_line = f"Спецификация заказа № {num_raw}"
+    else:
+        # Fallback — ищем число в header_text
+        nm = _re.search(r"(\d{3,6})", header_text)
+        number_line = f"Спецификация заказа № {nm.group(1)}" if nm else ""
+
+    text = number_line + "\n" + header_text + "\n" + body_text
+    _save_debug(body_clean, path)
+
+    print(f"[OCR] Шапка:\n{header_text[:200]}")
+    print(f"[OCR] Тело (первые 300):\n{body_text[:300]}\n---")
+    return text
+
 
 def _ocr_pdf_scan(path: str) -> str:
-    """OCR для PDF-скана: конвертируем страницу в изображение → Tesseract."""
     try:
         from pdf2image import convert_from_path
     except ImportError:
-        raise RuntimeError(
-            "PDF является сканом. Установите pdf2image + poppler:\n"
-            "  pip install pdf2image\n"
-            "  poppler: https://github.com/oschwartz10612/poppler-windows/releases"
-        )
+        raise RuntimeError("pip install pdf2image + poppler")
     pages = convert_from_path(path, dpi=250, first_page=1, last_page=1)
     if not pages:
         return ""
@@ -169,46 +222,140 @@ def _ocr_pdf_scan(path: str) -> str:
         os.unlink(tmp_path)
 
 
+def _debug_dir():
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = os.path.join(base, "debug")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _save_debug(img, source_path: str = ""):
+    try:
+        img.save(os.path.join(_debug_dir(), "ocr_input.jpg"))
+    except Exception:
+        pass
+
+def _save_crop(img, filename: str):
+    try:
+        img.save(os.path.join(_debug_dir(), filename))
+    except Exception:
+        pass
+
+def _autocrop(img):
+    """Обрезает пустые белые поля вокруг контента."""
+    try:
+        import numpy as np
+        import cv2
+        arr = np.array(img.convert("RGB"))
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        # Бинаризация — находим пиксели темнее 200
+        _, mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+        coords = cv2.findNonZero(mask)
+        if coords is None:
+            return img
+        x, y, w, h = cv2.boundingRect(coords)
+        # Добавляем небольшой отступ
+        pad = 10
+        x = max(0, x - pad)
+        y = max(0, y - pad)
+        w = min(arr.shape[1] - x, w + pad * 2)
+        h = min(arr.shape[0] - y, h + pad * 2)
+        from PIL import Image as PILImage
+        return PILImage.fromarray(arr[y:y+h, x:x+w])
+    except Exception:
+        return img
+
+
+# ─── ОЧИСТКА ТЕКСТА OCR ──────────────────────────────────────────
+
+def _clean(text: str, is_pdf: bool = False) -> str:
+    """
+    Нормализует текст.
+    is_pdf=True — мягкая очистка (нет артефактов рамок).
+    is_pdf=False — полная очистка OCR артефактов.
+    """
+    # Кириллический х → латинский (для "83х97", "4х4")
+    text = text.replace("х", "x").replace("Х", "x")
+
+    if not is_pdf:
+        # Убираем артефакты рамок ячеек характерные для OCR
+        text = re.sub(r"\|", " ", text)
+        text = re.sub(r"\[([^\]]*)\]", r"\1", text)
+        text = re.sub(r"\[", " ", text)
+        text = re.sub(r"\]", " ", text)
+        text = re.sub(r"<>", " ", text)
+
+    # Множественные пробелы → один
+    text = re.sub(r"[ \t]+", " ", text)
+
+    # Убираем пустые строки
+    lines = [l.strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    return "\n".join(lines)
+
+
 # ─── ПАРСЕР ──────────────────────────────────────────────────────
 
 def _parse(text: str) -> dict:
-    # Нормализуем: убираем лишние пробелы, кириллические x → латинские
-    text = re.sub(r"[ \t]+", " ", text)
-    # text = text.replace("|", " ")
-    text = text.replace("х", "x").replace("Х", "x")
-    
-
-
-    # Обрезаем до "Дата в печать" включительно
+    # Обрезаем до "Дата в печать"
     cut = re.search(r"дата\s+в\s+печать", text, re.I)
     if cut:
         text = text[: cut.end() + 40]
 
     d = {}
 
-    # Номер заказа
-    m = re.search(r"спецификация\s+заказа\s*[№#]?\s*(\d{3,5})", text, re.I)
+    # ── Номер заказа ─────────────────────────────────────────────
+    # Ищем в нескольких вариантах — OCR может разбить на строки
+    # или вставить артефакты между "Спецификация заказа №" и числом
+
+    # Вариант 1: "Спецификация заказа № 878" (всё в одной строке)
+    m = re.search(
+        r"спецификаци[яи]\s+заказа\s*[№#NnОо]?\s*\.?\s*(\d{3,6})",
+        text, re.I
+    )
     if not m:
-        m = re.search(r"заказ\s*[№#]\s*(\d{3,5})", text, re.I)
+        # Вариант 2: число в той же строке через любые символы
+        # "Спецификация заказа №  | 883 |" → после _clean → "Спецификация заказа №  883"
+        m = re.search(
+            r"спецификаци[яи]\s+заказа[^\n]{0,30}?(\d{3,6})",
+            text, re.I
+        )
+    if not m:
+        # Вариант 3: число на следующей строке сразу после заголовка
+        m = re.search(
+            r"спецификаци[яи]\s+заказа[^\d]{0,40}(\d{3,6})",
+            text, re.I | re.DOTALL
+        )
+    if not m:
+        # Вариант 4: "заказ № 878"
+        m = re.search(r"заказ\s*[№#]?\s*(\d{3,6})", text, re.I)
+    if not m:
+        # Вариант 5: одиночное число в первых 5 строках
+        for line in text.splitlines()[:5]:
+            line = line.strip()
+            if re.fullmatch(r"\d{3,6}", line):
+                m = re.match(r"(\d{3,6})", line)
+                break
     d["number"] = int(m.group(1)) if m else None
 
-    # Наименование заказа
+    # ── Наименование заказа ──────────────────────────────────────
     m = re.search(r"наименование\s+заказа\s+(.+)", text, re.I)
     d["name"] = m.group(1).strip().split("\n")[0].strip()[:64] if m else None
 
-    # Описание (тип изделия: брошюра, книга...)
+    # ── Описание ─────────────────────────────────────────────────
     m = re.search(r"описание\s+заказа\s+(.+)", text, re.I)
     d["description"] = m.group(1).strip().split("\n")[0][:32] if m else None
 
-    # Заказчик
+    # ── Заказчик ─────────────────────────────────────────────────
     m = re.search(r"заказчик[^)]*\)\s+(.+)", text, re.I)
+    if not m:
+        m = re.search(r"заказчик\s*\(организация\)\s+(.+)", text, re.I)
     d["client"] = m.group(1).strip().split("\n")[0][:64] if m else None
 
-    # Тираж
+    # ── Тираж ────────────────────────────────────────────────────
     m = re.search(r"тираж\s+(\d[\d\s]*)", text, re.I)
     d["circulation"] = int(re.sub(r"\s", "", m.group(1))) if m else None
 
-    # Формат изделия: "Формат 160x240"
+    # ── Формат изделия ───────────────────────────────────────────
     m = re.search(r"формат\s+(\d{2,4})\s*x\s*(\d{2,4})", text, re.I)
     if m:
         d["width"]  = int(m.group(1))
@@ -216,36 +363,32 @@ def _parse(text: str) -> dict:
     else:
         d["width"] = d["height"] = None
 
-    # Объём блока
+    # ── Объёмы ───────────────────────────────────────────────────
     m = re.search(r"объ[её]м\s+бло[кк]\s+(\d+)", text, re.I)
     d["pages_block"] = int(m.group(1)) if m else None
 
-    # Объём обложки
     m = re.search(r"объ[её]м\s+обл\.?\s+(\d+)", text, re.I)
     d["pages_cover"] = int(m.group(1)) if m else None
 
-    # Объём вклейки
     m = re.search(r"объ[её]м\s+вкл\.?\s+(\d+)", text, re.I)
     d["pages_insert"] = int(m.group(1)) if m else None
 
-    # Красочность блока: "4x4" → "4+4"
-    m = re.search(r"красочность\s+блока?\s+(\d+\s*x\s*\d+)", text, re.I)
+    # ── Красочность ──────────────────────────────────────────────
+    m = re.search(r"красочность\s+блока?\s+(\d+\s*[x+]\s*\d+)", text, re.I)
     d["color_block"] = _norm_color(m.group(1)) if m else None
 
-    # Красочность обложки
-    m = re.search(r"красочность\s+обло[жщ]ки\s+(\d+\s*x\s*\d+)", text, re.I)
+    m = re.search(r"красочность\s+обло[жщ]ки\s+(\d+\s*[x+]\s*\d+)", text, re.I)
     d["color_cover"] = _norm_color(m.group(1)) if m else None
 
-    # Красочность вклейки
-    m = re.search(r"красочность\s+вкле[йй]ки\s+(\d+\s*x\s*\d+)", text, re.I)
+    m = re.search(r"красочность\s+вкле[йй]ки\s+(\d+\s*[x+]\s*\d+)", text, re.I)
     d["color_insert"] = _norm_color(m.group(1)) if m else None
 
-    # Скрепление
+    # ── Скрепление ───────────────────────────────────────────────
     binding_map = [
-        (r"термо\s*кле[йй]|кбс|клее", "КБС"),
-        (r"скреп",                      "СКР"),
-        (r"ши[тт]ь|шитьё|швп",         "ШВП"),
-        (r"евро",                        "ЕВР"),
+        (r"термо\s*кле[йй]|кбс",  "КБС"),
+        (r"скреп",                  "СКР"),
+        (r"ши[тт]ь|шитьё|швп",     "ШВП"),
+        (r"евро",                   "ЕВР"),
     ]
     d["binding"] = None
     for pattern, val in binding_map:
@@ -258,45 +401,48 @@ def _parse(text: str) -> dict:
                 d["binding"] = val
                 break
 
-    # Ламинат
-    m = re.search(r"ламинат\s+([^\n]+)", text, re.I)
+    # ── Ламинат ──────────────────────────────────────────────────
+    m = re.search(r"ламинат\s+(?!двух)([^\n]+)", text, re.I)
     if m:
         lam = m.group(1).strip()
         if re.search(r"матов", lam, re.I):
             d["laminate"] = "мат"
         elif re.search(r"глянц", lam, re.I):
             d["laminate"] = "глянц"
-        else:
+        elif lam and not re.search(r"^\s*$", lam):
             d["laminate"] = lam[:16]
+        else:
+            d["laminate"] = None
     else:
         d["laminate"] = None
 
     m = re.search(r"вид\s+ламината\s+(.+)", text, re.I)
     d["laminate_type"] = m.group(1).strip().split("\n")[0][:32] if m else None
 
-    # Бумага блока: "Бумага блок  глянц.  105"
+    # ── Бумага ───────────────────────────────────────────────────
     m = re.search(r"бумага\s+бло[кк]\s+(\S+)\s+(\d+)", text, re.I)
     if m:
-        d["paper_block_type"]    = m.group(1).strip(".")
+        d["paper_block_type"]    = m.group(1).strip(".").strip()
         d["paper_block_density"] = int(m.group(2))
     else:
         d["paper_block_type"] = d["paper_block_density"] = None
 
-    # Бумага обложки: "Бумага обл.+подл.  мат.  250"
     m = re.search(r"бумага\s+обл[^.]*\s+(\S+)\s+(\d+)", text, re.I)
     if m:
-        d["paper_cover_type"]    = m.group(1).strip(".")
+        d["paper_cover_type"]    = m.group(1).strip(".").strip()
         d["paper_cover_density"] = int(m.group(2))
     else:
         d["paper_cover_type"] = d["paper_cover_density"] = None
 
-    # Даты
+    # ── Даты ─────────────────────────────────────────────────────
     d["due_date"]      = _find_date(text, r"дата\s+в\s+печать")
     d["delivery_date"] = _find_date(text, r"дата\s+сдачи\s+тиража")
     d["submit_date"]   = _find_date(text, r"дата\s+сдачи\s+материалов")
 
     return d
 
+
+# ─── ВСПОМОГАТЕЛЬНЫЕ ─────────────────────────────────────────────
 
 def _find_date(text: str, label_pattern: str):
     m = re.search(
@@ -307,7 +453,8 @@ def _find_date(text: str, label_pattern: str):
 
 
 def _norm_color(s: str) -> str:
-    return re.sub(r"\s", "", s).replace("x", "+")
+    s = re.sub(r"\s", "", s)
+    return s.replace("x", "+")
 
 
 def _norm_date(s: str) -> str:
