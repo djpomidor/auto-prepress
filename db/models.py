@@ -97,6 +97,17 @@ class Order(Base):
     folder_path = Column(String(256), nullable=True)
     monitoring  = Column(Boolean, default=False)
 
+    # Поля из спецификации заказа (заполняются OCR или вручную)
+    description    = Column(String(64),  nullable=True)  # "Описание заказа" (книга, брошюра...)
+    pages_block    = Column(Integer,     nullable=True)   # Объём блок
+    pages_cover    = Column(Integer,     nullable=True)   # Объём обл.
+    pages_insert   = Column(Integer,     nullable=True)   # Объём вкл.
+    color_block    = Column(String(16),  nullable=True)   # Красочность блока, напр. "4+4"
+    color_cover    = Column(String(16),  nullable=True)   # Красочность обложки
+    color_insert   = Column(String(16),  nullable=True)   # Красочность вклейки
+    postprocessing = Column(Text,        nullable=True)   # Постпечатная обработка
+    tech_notes     = Column(Text,        nullable=True)   # Технические пояснения
+
     owners = relationship("User", secondary=order_owner_table, back_populates="orders")
     parts  = relationship("Part", back_populates="order", cascade="all, delete-orphan")
 
