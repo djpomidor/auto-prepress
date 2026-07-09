@@ -80,7 +80,7 @@ class OrderPage(ctk.CTkFrame):
         if order_id:
             self._load_order(order_id)
 
-# ── BUILD ─────────────────────────────────────────────────────
+    # ── BUILD ─────────────────────────────────────────────────────
     def _build(self):
         # Три панели в PanedWindow — форма / превью спецификации /
         # результаты PitStop. Границы можно перетаскивать мышью.
@@ -102,14 +102,19 @@ class OrderPage(ctk.CTkFrame):
         )
         self._paned.pack(fill="both", expand=True)
 
-        # ── Левая панель — внешняя оболочка для формы ───────────
-        # Создаем плоский контейнер-оболочку, который PanedWindow поймет без проблем
-        left_container = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
+        # ── Левая панель — форма ────────────────────────────────
+        # ВАЖНО: tk.PanedWindow.add() требует, чтобы добавляемый виджет
+        # был прямым потомком panedwindow на уровне Tcl. У CTkScrollableFrame
+        # сложная внутренняя структура (canvas + внутренний frame), поэтому
+        # напрямую добавлять его в PanedWindow нельзя — сначала оборачиваем
+        # в обычный CTkFrame-контейнер, который и добавляем в панель.
+        left_container = ctk.CTkFrame(
+            self._paned, fg_color=("gray90","gray17"), corner_radius=0,
+        )
         self._paned.add(left_container, width=left_default_w, minsize=280, stretch="never")
 
-        # Теперь помещаем ваш CTkScrollableFrame внутрь этой оболочки
         left = ctk.CTkScrollableFrame(
-            left_container, fg_color=("gray90","gray17"), corner_radius=0,
+            left_container, fg_color="transparent", corner_radius=0,
             scrollbar_button_color=DARK_BD,
         )
         left.pack(fill="both", expand=True)
@@ -525,23 +530,28 @@ class OrderPage(ctk.CTkFrame):
             self._start_monitoring(o)
 
     def _load_existing_preview(self):
-        """При открытии существующего заказа — ищем уже сохранённую
-        спецификацию (PDF/JPG) в папке in/ и показываем превью."""
+        """При открытии существующего заказа — показываем превью уже
+        сохранённой спецификации (PDF/JPG)."""
         if not self.order or not self.order.folder_path:
             return
-        in_path = os.path.join(self.order.folder_path, "in")
-        if not os.path.isdir(in_path):
-            return
-        candidates = [
-            f for f in os.listdir(in_path)
-            if f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png"))
-            and not f.endswith("_preview.jpg")
-        ]
-        if not candidates:
-            return
-        # Берём самый свежий файл
-        candidates.sort(key=lambda f: os.path.getmtime(os.path.join(in_path, f)), reverse=True)
-        path = os.path.join(in_path, candidates[0])
+
+        path = self.order.spec_path
+        if not path or not os.path.isfile(path):
+            # Заказ создан до появления поля spec_path — ищем в корне
+            # папки заказа (старое поведение, best-effort)
+            root = self.order.folder_path
+            if not os.path.isdir(root):
+                return
+            candidates = [
+                f for f in os.listdir(root)
+                if f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png"))
+                and not f.endswith("_preview.jpg")
+            ]
+            if not candidates:
+                return
+            candidates.sort(key=lambda f: os.path.getmtime(os.path.join(root, f)), reverse=True)
+            path = os.path.join(root, candidates[0])
+
         threading.Thread(target=self._update_preview_display, args=(path,), daemon=True).start()
 
     # ── SPEC FILE ─────────────────────────────────────────────────
@@ -587,10 +597,11 @@ class OrderPage(ctk.CTkFrame):
 
     def _stage_spec_file(self, path: str) -> str:
         """
-        Переносит файл спецификации в папку заказа на диске P: (в
-        подпапку "in") ДО распознавания. Если заказ ещё не создан
-        (папки не существует), запоминает путь — файл будет
-        скопирован в папку заказа сразу после её создания.
+        Переносит файл спецификации в КОРЕНЬ папки заказа на диске P:
+        (не в in\\ — там теперь лежат файлы заказчика для Prinergy
+        Refine) ДО распознавания. Если заказ ещё не создан (папки не
+        существует), запоминает путь — файл будет скопирован в папку
+        заказа сразу после её создания.
         Возвращает путь, с которого нужно распознавать (копия в
         папке заказа, либо исходный путь, если папки ещё нет).
         """
@@ -599,13 +610,13 @@ class OrderPage(ctk.CTkFrame):
             self._pending_spec_path = path
             return path
 
-        in_path = os.path.join(folder_path, "in")
         try:
-            os.makedirs(in_path, exist_ok=True)
-            dst = os.path.join(in_path, os.path.basename(path))
+            os.makedirs(folder_path, exist_ok=True)
+            dst = os.path.join(folder_path, os.path.basename(path))
             if os.path.abspath(dst) != os.path.abspath(path):
                 shutil.copy2(path, dst)
             self._pending_spec_path = None
+            self._save_spec_path(dst)
             return dst
         except Exception as e:
             # Диск P: недоступен — распознаём с исходного пути,
@@ -615,6 +626,24 @@ class OrderPage(ctk.CTkFrame):
             )
             self._pending_spec_path = path
             return path
+
+    def _save_spec_path(self, path: str):
+        """Сохраняет путь к файлу спецификации в БД, чтобы потом
+        безошибочно находить его для превью (в корне заказа могут
+        появиться и другие PDF — отрефайненные файлы заказчика)."""
+        if not self.order or not self.order.id:
+            return
+        self.order.spec_path = path
+        session = get_session()
+        try:
+            o = session.get(Order, self.order.id)
+            if o:
+                o.spec_path = path
+                session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            session.close()
 
     def _process_spec(self, path: str):
         # Сначала переносим файл в папку заказа на P: (если она уже
@@ -821,14 +850,15 @@ class OrderPage(ctk.CTkFrame):
             pass  # Сетевой диск может быть недоступен
 
         # Если спецификация была распознана ДО создания заказа (папки
-        # ещё не было) — переносим её в папку заказа сейчас, и заодно
-        # сохраняем JPG превью (для PDF) на диск P:.
+        # ещё не было) — переносим её в КОРЕНЬ папки заказа сейчас, и
+        # заодно сохраняем JPG превью (для PDF) на диск P:.
         if self._pending_spec_path and os.path.isfile(self._pending_spec_path):
             try:
-                dst = os.path.join(in_path, os.path.basename(self._pending_spec_path))
+                dst = os.path.join(folder_path, os.path.basename(self._pending_spec_path))
                 if os.path.abspath(dst) != os.path.abspath(self._pending_spec_path):
                     shutil.copy2(self._pending_spec_path, dst)
                 self._pending_spec_path = None
+                o.spec_path = dst
                 self._save_preview_jpg(dst, folder_path)
             except Exception:
                 pass  # Диск P: недоступен — попробуем при следующем сохранении
@@ -865,6 +895,8 @@ class OrderPage(ctk.CTkFrame):
         try:
             order = session.get(Order, o.id)
             order.folder_path = folder_path
+            if o.spec_path:
+                order.spec_path = o.spec_path
             session.commit()
         finally:
             session.close()

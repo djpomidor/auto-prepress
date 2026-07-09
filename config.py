@@ -30,10 +30,11 @@ DEFAULTS = {
     # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
     "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
 
-    # ── Prinergy Evo Refine (hot-папки) ─────────────────────────────
-    # ЗАПОЛНИТЕ реальными путями к hot-папкам Prinergy Refine.
-    "prinergy_refine_in":  r"",
-    "prinergy_refine_out": r"",
+    # ── Prinergy Evo Refine (горячая папка) ──────────────────────────
+    # Куда копируются "сырые" PDF заказчика для рефайна.
+    # Отрефайненные файлы Prinergy сам кладёт ОБРАТНО в папку in\
+    # заказа — отдельная папка для результата не нужна.
+    "prinergy_refine_in": r"",
 
     # ── Ollama ────────────────────────────────────────────────────
     "ollama_url":   "http://localhost:11434/api/generate",

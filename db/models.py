@@ -96,6 +96,7 @@ class Order(Base):
     # Дополнительные поля ImpoReader (не в Printery — добавляем миграцией)
     folder_path = Column(String(256), nullable=True)
     monitoring  = Column(Boolean, default=False)
+    spec_path   = Column(String(256), nullable=True)  # путь к файлу спецификации (PDF/JPG) в корне папки заказа
 
     # Поля из спецификации заказа (заполняются OCR или вручную)
     description    = Column(String(64),  nullable=True)  # "Описание заказа" (книга, брошюра...)
@@ -107,6 +108,7 @@ class Order(Base):
     color_insert   = Column(String(16),  nullable=True)   # Красочность вклейки
     postprocessing = Column(Text,        nullable=True)   # Постпечатная обработка
     tech_notes     = Column(Text,        nullable=True)   # Технические пояснения
+    spec_path      = Column(String(256), nullable=True)   # Путь к файлу спецификации (в корне папки заказа)
 
     owners = relationship("User", secondary=order_owner_table, back_populates="orders")
     parts  = relationship("Part", back_populates="order", cascade="all, delete-orphan")
