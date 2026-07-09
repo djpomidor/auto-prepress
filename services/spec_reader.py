@@ -6,6 +6,17 @@ import re
 import os
 
 
+def _poppler_kwargs() -> dict:
+    """Путь к Poppler (pdftoppm/pdfinfo), если он не в системном PATH —
+    берётся из config.json (ключ poppler_path)."""
+    try:
+        import config
+        p = config.CFG.get("poppler_path") or ""
+        return {"poppler_path": p} if p else {}
+    except Exception:
+        return {}
+
+
 # ─── PUBLIC API ──────────────────────────────────────────────────
 
 def read_spec(path: str) -> dict:
@@ -209,7 +220,7 @@ def _ocr_pdf_scan(path: str) -> str:
         from pdf2image import convert_from_path
     except ImportError:
         raise RuntimeError("pip install pdf2image + poppler")
-    pages = convert_from_path(path, dpi=250, first_page=1, last_page=1)
+    pages = convert_from_path(path, dpi=250, first_page=1, last_page=1, **_poppler_kwargs())
     if not pages:
         return ""
     import tempfile

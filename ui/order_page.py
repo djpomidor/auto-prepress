@@ -3,6 +3,7 @@
 """
 import os
 import shutil
+import tempfile
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -12,6 +13,12 @@ from datetime import datetime
 from db.database import get_session
 from db.models import Order
 import config
+
+# Куда сохраняется JPG превью распознанной спецификации ДО того, как
+# заказ создан (папки на P: ещё нет) — переживает переключение между
+# страницами приложения (но не предназначено для долгого хранения).
+_PENDING_PREVIEW_DIR  = os.path.join(tempfile.gettempdir(), "ImpoReader")
+_PENDING_PREVIEW_PATH = os.path.join(_PENDING_PREVIEW_DIR, "pending_preview.jpg")
 
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
@@ -28,8 +35,14 @@ SUCCESS  = "#33cc66"
 WARNING  = "#ffaa33"
 
 
-def _label(parent, text, **kw):
-    return ctk.CTkLabel(
+def _poppler_kwargs() -> dict:
+    """Путь к Poppler (pdftoppm/pdfinfo), если он не в системном PATH —
+    берётся из config.json (ключ poppler_path)."""
+    p = config.CFG.get("poppler_path") or ""
+    return {"poppler_path": p} if p else {}
+
+
+def _label(parent, text, **kw):    return ctk.CTkLabel(
         parent, text=text,
         font=("JetBrains Mono", 10), text_color=("gray40","gray60"),
         anchor="w", **kw
@@ -80,6 +93,8 @@ class OrderPage(ctk.CTkFrame):
 
         if order_id:
             self._load_order(order_id)
+        else:
+            self._load_pending_preview_temp()
 
     # ── BUILD ─────────────────────────────────────────────────────
     def _build(self):
@@ -299,7 +314,10 @@ class OrderPage(ctk.CTkFrame):
             from PIL import Image
             if ext == ".pdf":
                 from pdf2image import convert_from_path
-                pages = convert_from_path(path, dpi=150, first_page=1, last_page=1)
+                pages = convert_from_path(
+                    path, dpi=150, first_page=1, last_page=1,
+                    **_poppler_kwargs()
+                )
                 if not pages:
                     return
                 img = pages[0]
@@ -308,6 +326,11 @@ class OrderPage(ctk.CTkFrame):
                 img.load()
             self._preview_pil_image = img
             self._preview_zoom = 1.0
+            # Пока заказ не создан (папки на P: нет) — сохраняем превью
+            # во временную папку, чтобы не потерять его при переходе
+            # между страницами приложения.
+            if not (self.order and self.order.folder_path):
+                self._save_pending_preview_temp(img)
             self.after(0, self._render_preview)
         except Exception as e:
             self._preview_pil_image = None
@@ -319,6 +342,34 @@ class OrderPage(ctk.CTkFrame):
                 fill=DANGER, font=("JetBrains Mono", 12), justify="center",
             ))
 
+    def _save_pending_preview_temp(self, img):
+        """Сохраняет превью во временную папку (пока заказ не создан)."""
+        try:
+            os.makedirs(_PENDING_PREVIEW_DIR, exist_ok=True)
+            img.convert("RGB").save(_PENDING_PREVIEW_PATH, "JPEG", quality=90)
+        except Exception:
+            pass
+
+    def _load_pending_preview_temp(self):
+        """При открытии страницы НОВОГО заказа — подхватываем превью,
+        сохранённое во временной папке при предыдущем распознавании
+        (если пользователь успел уйти со страницы, не создав заказ)."""
+        if self.order_id or not os.path.isfile(_PENDING_PREVIEW_PATH):
+            return
+        threading.Thread(
+            target=self._update_preview_display,
+            args=(_PENDING_PREVIEW_PATH,), daemon=True
+        ).start()
+
+    def _clear_pending_preview_temp(self):
+        """Удаляет временное превью — вызывается после того, как
+        спецификация и её JPG-превью уже сохранены в папке заказа."""
+        try:
+            if os.path.isfile(_PENDING_PREVIEW_PATH):
+                os.remove(_PENDING_PREVIEW_PATH)
+        except Exception:
+            pass
+
     def _save_preview_jpg(self, pdf_path: str, folder_path: str):
         """Сохраняет JPG превью первой страницы PDF-спецификации в
         папку заказа на диске P: (рядом со спецификацией в in/)."""
@@ -326,7 +377,10 @@ class OrderPage(ctk.CTkFrame):
             return None
         try:
             from pdf2image import convert_from_path
-            pages = convert_from_path(pdf_path, dpi=150, first_page=1, last_page=1)
+            pages = convert_from_path(
+                pdf_path, dpi=150, first_page=1, last_page=1,
+                **_poppler_kwargs()
+            )
             if not pages:
                 return None
             stem = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -972,6 +1026,7 @@ class OrderPage(ctk.CTkFrame):
                 self._pending_spec_path = None
                 o.spec_path = dst
                 self._save_preview_jpg(dst, folder_path)
+                self._clear_pending_preview_temp()
             except Exception:
                 pass  # Диск P: недоступен — попробуем при следующем сохранении
 

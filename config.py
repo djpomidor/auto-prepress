@@ -30,6 +30,13 @@ DEFAULTS = {
     # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
     "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
 
+    # ── Poppler (pdftoppm/pdfinfo) для рендера PDF → изображение ────
+    # Укажите путь к папке Library\bin из архива Poppler, если она НЕ
+    # добавлена в системный PATH, например:
+    #   r"C:\poppler\poppler-24.08.0\Library\bin"
+    # Оставьте "" если Poppler уже в PATH.
+    "poppler_path": r"",
+
     # ── Prinergy Evo Refine (горячая папка) ──────────────────────────
     # Куда копируются "сырые" PDF заказчика для рефайна.
     # Отрефайненные файлы Prinergy сам кладёт ОБРАТНО в папку in\

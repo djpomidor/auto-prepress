@@ -14,5 +14,6 @@
   "theme": "dark",
   "window_width": 1400,
   "window_height": 860,
-  "db_path": "E:\\MyDocs\\projects\\auto_prepress\\tests\\1\\impo_reader.db"
+  "db_path": "E:\\MyDocs\\projects\\auto_prepress\\tests\\1\\impo_reader.db",
+  "poppler_path": "C:\\poppler\\poppler-26.02.0\\Library\\bin"
 }
