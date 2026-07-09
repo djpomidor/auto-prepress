@@ -48,8 +48,17 @@ def init_db():
 def _migrate_extra_columns():
     """Добавляет колонки folder_path и monitoring если их нет."""
     extra = [
-        ("printery_order", "folder_path", "VARCHAR(256)"),
-        ("printery_order", "monitoring",  "BOOLEAN DEFAULT 0"),
+        ("printery_order", "folder_path",     "VARCHAR(256)"),
+        ("printery_order", "monitoring",      "BOOLEAN DEFAULT 0"),
+        ("printery_order", "description",     "VARCHAR(64)"),
+        ("printery_order", "pages_block",     "INTEGER"),
+        ("printery_order", "pages_cover",     "INTEGER"),
+        ("printery_order", "pages_insert",    "INTEGER"),
+        ("printery_order", "color_block",     "VARCHAR(16)"),
+        ("printery_order", "color_cover",     "VARCHAR(16)"),
+        ("printery_order", "color_insert",    "VARCHAR(16)"),
+        ("printery_order", "postprocessing",  "TEXT"),
+        ("printery_order", "tech_notes",      "TEXT"),
     ]
     with _engine.connect() as conn:
         for table, col, col_type in extra:

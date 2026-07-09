@@ -15,8 +15,70 @@
   </EnfocusReport>
 """
 import os
+import datetime
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+
+
+def list_pitstop_reports(log_dir: str) -> list:
+    """
+    Возвращает список отчётов PitStop в папке лога, отсортированный
+    от новых к старым (по времени изменения файла).
+    Каждый элемент:
+      {
+        "fname": "...", "xml_path": "...", "pdf_path": "..." | None,
+        "dt": datetime, "errors": int, "warnings": int,
+        "page_sizes": {"150.0x225.0 мм": [1,2,3,...]},
+        "page_count": int,
+        "text": "отформатированный текст отчёта",
+      }
+    """
+    if not os.path.isdir(log_dir):
+        return []
+
+    xml_files = [f for f in os.listdir(log_dir) if f.lower().endswith(".xml")]
+    reports = []
+    for fname in xml_files:
+        path = os.path.join(log_dir, fname)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        dt = datetime.datetime.fromtimestamp(mtime)
+
+        try:
+            tree = ET.parse(path)
+            root = tree.getroot()
+        except ET.ParseError:
+            continue
+
+        report_el = root.find(".//PreflightReport")
+        errors   = int(report_el.get("errors", "0"))   if report_el is not None and report_el.get("errors", "0").isdigit()   else 0
+        warnings = int(report_el.get("warnings", "0")) if report_el is not None and report_el.get("warnings", "0").isdigit() else 0
+
+        page_sizes = _extract_page_sizes(root)
+        page_count = len({p for pages in page_sizes.values() for p in pages})
+
+        # Ищем PDF-версию того же отчёта рядом (стандартная выгрузка
+        # Enfocus PitStop Server кладёт .xml и .pdf с одинаковым именем)
+        stem = os.path.splitext(fname)[0]
+        pdf_candidate = os.path.join(log_dir, stem + ".pdf")
+        pdf_path = pdf_candidate if os.path.isfile(pdf_candidate) else None
+
+        reports.append({
+            "fname": fname,
+            "xml_path": path,
+            "pdf_path": pdf_path,
+            "dt": dt,
+            "errors": errors,
+            "warnings": warnings,
+            "page_sizes": page_sizes,
+            "page_count": page_count,
+            "text": _parse_enfocus_xml(path, fname),
+        })
+
+    reports.sort(key=lambda r: r["dt"], reverse=True)
+    return reports
 
 
 def parse_pitstop_log(log_dir: str) -> str:
@@ -165,6 +227,47 @@ def _extract_page_sizes(root) -> dict:
                     pass
 
     return dict(sizes)
+
+
+def check_mismatch(report: dict, order) -> list:
+    """
+    Сравнивает данные последнего отчёта PitStop с данными заказа.
+    Возвращает список текстовых предупреждений о несовпадениях
+    (обрезной формат, количество полос). Пустой список — совпадает
+    или сравнивать не с чем.
+    """
+    warnings_out = []
+    if not report:
+        return warnings_out
+
+    # ── Формат ────────────────────────────────────────────────────
+    if order.width and order.height and report.get("page_sizes"):
+        # Берём самый частый формат в отчёте (по кол-ву страниц)
+        best_size = max(report["page_sizes"].items(), key=lambda kv: len(kv[1]))[0]
+        try:
+            w_str, h_str = best_size.replace(" мм", "").split("×")
+            w_pdf, h_pdf = float(w_str), float(h_str)
+            tol = 2.0  # мм — допуск на погрешность обмера
+            match = (
+                (abs(w_pdf - order.width) <= tol and abs(h_pdf - order.height) <= tol) or
+                (abs(w_pdf - order.height) <= tol and abs(h_pdf - order.width) <= tol)  # с учётом поворота
+            )
+            if not match:
+                warnings_out.append(
+                    f"⚠ Формат в PitStop: {best_size}, в заказе: {order.width}×{order.height} мм"
+                )
+        except (ValueError, IndexError):
+            pass
+
+    # ── Количество полос (сравниваем с «Объём блок») ────────────────
+    if order.pages_block and report.get("page_count"):
+        if report["page_count"] != order.pages_block:
+            warnings_out.append(
+                f"⚠ Полос в файле PitStop: {report['page_count']}, "
+                f"в заказе (Объём блок): {order.pages_block}"
+            )
+
+    return warnings_out
 
 
 def _format_page_list(pages: list) -> str:

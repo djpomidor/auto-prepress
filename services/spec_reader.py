@@ -434,6 +434,22 @@ def _parse(text: str) -> dict:
     else:
         d["paper_cover_type"] = d["paper_cover_density"] = None
 
+    # ── Постпечатная обработка ──────────────────────────────────────
+    m = re.search(r"постпечатн(?:ая|ой)\s+обработка\s*[:\-]?\s*(.+)", text, re.I)
+    d["postprocessing"] = m.group(1).strip().split("\n")[0][:200] if m else None
+
+    # ── Технические пояснения ────────────────────────────────────
+    m = re.search(r"техническ(?:ие|ое)\s+поясн(?:ения|ение)\s*[:\-]?\s*(.+)", text, re.I | re.DOTALL)
+    if m:
+        note = m.group(1).strip()
+        # Обрезаем по следующему разделу спецификации, если попался
+        stop = re.search(r"\n\s*(дата\s+в\s+печать|дата\s+сдачи)", note, re.I)
+        if stop:
+            note = note[: stop.start()]
+        d["tech_notes"] = note.strip()[:500] or None
+    else:
+        d["tech_notes"] = None
+
     # ── Даты ─────────────────────────────────────────────────────
     d["due_date"]      = _find_date(text, r"дата\s+в\s+печать")
     d["delivery_date"] = _find_date(text, r"дата\s+сдачи\s+тиража")

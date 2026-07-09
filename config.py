@@ -27,6 +27,14 @@ DEFAULTS = {
     "pitstop_in":  r"D:\\Pitstop_\\out",
     "pitstop_log": r"D:\\Pitstop_\\Log",
 
+    # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
+    "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+
+    # ── Prinergy Evo Refine (hot-папки) ─────────────────────────────
+    # ЗАПОЛНИТЕ реальными путями к hot-папкам Prinergy Refine.
+    "prinergy_refine_in":  r"",
+    "prinergy_refine_out": r"",
+
     # ── Ollama ────────────────────────────────────────────────────
     "ollama_url":   "http://localhost:11434/api/generate",
     "ollama_model": "qwen2-vl:7b",
