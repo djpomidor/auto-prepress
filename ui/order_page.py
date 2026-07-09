@@ -5,6 +5,7 @@ import os
 import shutil
 import threading
 import tkinter as tk
+from tkinter import ttk
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from datetime import datetime
@@ -145,17 +146,67 @@ class OrderPage(ctk.CTkFrame):
         hdr.grid_propagate(False)
         _label(hdr, "ПРЕВЬЮ СПЕЦИФИКАЦИИ").pack(side="left", padx=16, pady=8)
 
+        # ── Управление зумом ─────────────────────────────────────
+        zoom_box = ctk.CTkFrame(hdr, fg_color="transparent")
+        zoom_box.pack(side="right", padx=10, pady=4)
+
+        ctk.CTkButton(
+            zoom_box, text="−", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_out,
+        ).pack(side="left", padx=2)
+
+        self._zoom_lbl = ctk.CTkLabel(
+            zoom_box, text="—", font=("JetBrains Mono", 10), width=42,
+        )
+        self._zoom_lbl.pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            zoom_box, text="+", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_in,
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            zoom_box, text="⤢ 100%", width=56, height=24, font=("JetBrains Mono", 10),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_reset,
+        ).pack(side="left", padx=(6, 0))
+
+        # ── Холст превью (с прокруткой при увеличении) ────────────
         self._preview_area = ctk.CTkFrame(parent, fg_color="transparent")
         self._preview_area.grid(row=1, column=0, sticky="nsew")
+        self._preview_area.grid_rowconfigure(0, weight=1)
+        self._preview_area.grid_columnconfigure(0, weight=1)
 
-        self.preview_label = ctk.CTkLabel(
-            self._preview_area,
-            text="Спецификация ещё не загружена.\nПеретащите PDF/JPG в левую панель.",
-            font=("JetBrains Mono", 12), text_color=TEXT3,
+        is_dark = ctk.get_appearance_mode().lower() == "dark"
+        canvas_bg = "#161616" if is_dark else "#dcdcdc"
+
+        self._preview_canvas = tk.Canvas(
+            self._preview_area, bg=canvas_bg, highlightthickness=0, bd=0,
         )
-        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
-        self._preview_area.bind("<Configure>", lambda e: self._render_preview())
-        self._preview_pil_image = None
+        self._preview_canvas.grid(row=0, column=0, sticky="nsew")
+
+        vsb = ttk.Scrollbar(self._preview_area, orient="vertical",
+                             command=self._preview_canvas.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb = ttk.Scrollbar(self._preview_area, orient="horizontal",
+                             command=self._preview_canvas.xview)
+        hsb.grid(row=1, column=0, sticky="ew")
+        self._preview_canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self._preview_pil_image = None   # оригинал (полное разрешение)
+        self._preview_tk_image  = None   # текущая отрисованная картинка (ссылка для GC)
+        self._preview_zoom      = 1.0    # множитель поверх масштаба "вписать в окно"
+
+        self._preview_canvas.bind("<Configure>", lambda e: self._render_preview())
+        # Зум колесом мыши
+        self._preview_canvas.bind("<MouseWheel>", self._on_preview_wheel)        # Windows/macOS
+        self._preview_canvas.bind("<Button-4>", lambda e: self._zoom_step(1))    # Linux — вверх
+        self._preview_canvas.bind("<Button-5>", lambda e: self._zoom_step(-1))   # Linux — вниз
+        # Перетаскивание (панорамирование) зажатой левой кнопкой мыши
+        self._preview_canvas.bind("<ButtonPress-1>", lambda e: self._preview_canvas.scan_mark(e.x, e.y))
+        self._preview_canvas.bind("<B1-Motion>", lambda e: self._preview_canvas.scan_dragto(e.x, e.y, gain=1))
 
         # ── Полоса несовпадений (формат / кол-во полос) ──────────
         self._mismatch_bar = ctk.CTkFrame(parent, fg_color=WARNING, corner_radius=0, height=0)
@@ -168,23 +219,78 @@ class OrderPage(ctk.CTkFrame):
         self._mismatch_lbl.pack(fill="x", padx=14, pady=6)
         self._mismatch_bar.grid_remove()  # скрыт пока нет предупреждений
 
-    def _render_preview(self):
-        """Масштабирует self._preview_pil_image под текущий размер панели."""
+        self._render_preview()
+
+    # ── ZOOM ──────────────────────────────────────────────────────
+    def _on_preview_wheel(self, event):
+        direction = 1 if event.delta > 0 else -1
+        self._zoom_step(direction)
+
+    def _zoom_step(self, direction: int):
         if not self._preview_pil_image:
             return
+        factor = 1.15 if direction > 0 else (1 / 1.15)
+        self._preview_zoom = max(0.15, min(8.0, self._preview_zoom * factor))
+        self._render_preview()
+
+    def _zoom_in(self):
+        self._zoom_step(1)
+
+    def _zoom_out(self):
+        self._zoom_step(-1)
+
+    def _zoom_reset(self):
+        """Возврат к масштабу «вписать в окно»."""
+        self._preview_zoom = 1.0
+        self._render_preview()
+
+    def _render_preview(self):
+        """Перерисовывает превью на холсте с учётом текущего зума."""
+        if not hasattr(self, "_preview_canvas"):
+            return
+        canvas = self._preview_canvas
+        cw = max(1, canvas.winfo_width())
+        ch = max(1, canvas.winfo_height())
+
+        if not self._preview_pil_image:
+            canvas.delete("all")
+            canvas.create_text(
+                cw // 2, ch // 2,
+                text="Спецификация ещё не загружена.\nПеретащите PDF/JPG в левую панель.",
+                fill=TEXT3, font=("JetBrains Mono", 12), justify="center",
+            )
+            canvas.configure(scrollregion=(0, 0, cw, ch))
+            if hasattr(self, "_zoom_lbl"):
+                self._zoom_lbl.configure(text="—")
+            return
+
         try:
-            from PIL import Image
+            from PIL import Image, ImageTk
         except ImportError:
             return
-        w = max(50, self._preview_area.winfo_width() - 24)
-        h = max(50, self._preview_area.winfo_height() - 24)
-        if w <= 1 or h <= 1:
-            return
-        img = self._preview_pil_image.copy()
-        img.thumbnail((w, h), Image.LANCZOS)
-        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-        self.preview_label.configure(image=ctk_img, text="")
-        self.preview_label.image = ctk_img  # хранить ссылку — иначе GC уберёт картинку
+
+        img = self._preview_pil_image
+        iw, ih = img.size
+        fit_scale = min(cw / iw, ch / ih) if iw and ih else 1.0
+        fit_scale = max(fit_scale, 0.01)
+        scale = max(0.02, fit_scale * self._preview_zoom)
+
+        new_w = max(1, int(iw * scale))
+        new_h = max(1, int(ih * scale))
+        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        self._preview_tk_image = ImageTk.PhotoImage(resized)
+
+        canvas.delete("all")
+        # Если картинка меньше холста — центрируем, иначе — от угла
+        # (и разрешаем скроллить/перетаскивать)
+        x0 = max(0, (cw - new_w) // 2)
+        y0 = max(0, (ch - new_h) // 2)
+        canvas.create_image(x0, y0, anchor="nw", image=self._preview_tk_image)
+        region_w = max(cw, new_w)
+        region_h = max(ch, new_h)
+        canvas.configure(scrollregion=(0, 0, region_w, region_h))
+
+        self._zoom_lbl.configure(text=f"{int(self._preview_zoom * 100)}%")
 
     def _update_preview_display(self, path: str):
         """Загружает (или рендерит из PDF) картинку в центральную панель."""
@@ -201,10 +307,16 @@ class OrderPage(ctk.CTkFrame):
                 img = Image.open(path)
                 img.load()
             self._preview_pil_image = img
+            self._preview_zoom = 1.0
             self.after(0, self._render_preview)
         except Exception as e:
-            self.after(0, lambda: self.preview_label.configure(
-                image=None, text=f"Не удалось построить превью:\n{e}"
+            self._preview_pil_image = None
+            err = str(e)
+            self.after(0, lambda: self._preview_canvas.create_text(
+                self._preview_canvas.winfo_width() // 2,
+                self._preview_canvas.winfo_height() // 2,
+                text=f"Не удалось построить превью:\n{err}",
+                fill=DANGER, font=("JetBrains Mono", 12), justify="center",
             ))
 
     def _save_preview_jpg(self, pdf_path: str, folder_path: str):

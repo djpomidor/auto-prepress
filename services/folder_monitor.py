@@ -154,6 +154,41 @@ class FolderMonitor:
         self._observer.start()
         log.info(f"Мониторинг запущен (PollingObserver, 5 сек): {self.in_path}")
 
+        # ВАЖНО: watchdog сообщает только о файлах, появившихся ПОСЛЕ
+        # старта наблюдения. Файлы, которые уже лежали в in\ до
+        # включения мониторинга (например, заказчик закинул их раньше,
+        # чем был нажат тумблер "Мониторинг"), никогда не попадут в
+        # on_created/on_modified — и раньше просто повисали в in\
+        # навсегда. Поэтому сразу после старта явно проверяем и
+        # обрабатываем такие "старые" необработанные файлы.
+        self._process_existing_files()
+
+    def _process_existing_files(self):
+        if not os.path.isdir(self.in_path):
+            return
+        for fname in os.listdir(self.in_path):
+            if not fname.lower().endswith(".pdf"):
+                continue
+            path = os.path.join(self.in_path, fname)
+            if fname in self._processing:
+                continue
+
+            if _is_refined(fname):
+                needs_processing = True  # решение всегда по статусу родителя — безопасно повторить
+            else:
+                stem = os.path.splitext(fname)[0]
+                info = self._status.get(stem)
+                needs_processing = (
+                    not info or info.get("signature") != self._file_signature(path)
+                )
+
+            if needs_processing:
+                log.info(f"Обрабатываю файл, обнаруженный при старте мониторинга: {fname}")
+                self._processing.add(fname)
+                threading.Thread(
+                    target=self._route_new_file, args=(path, fname), daemon=True
+                ).start()
+
     def stop(self):
         if self._observer:
             self._observer.stop()
