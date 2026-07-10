@@ -35,7 +35,7 @@ DEFAULTS = {
     # добавлена в системный PATH, например:
     #   r"C:\poppler\poppler-24.08.0\Library\bin"
     # Оставьте "" если Poppler уже в PATH.
-    "poppler_path": r"",
+    "poppler_path": r"C:\poppler\poppler-26.02.0\Library\bin",
 
     # ── Prinergy Evo Refine (горячая папка) ──────────────────────────
     # Куда копируются "сырые" PDF заказчика для рефайна.
@@ -60,8 +60,15 @@ def load() -> dict:
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 saved = json.load(f)
             return {**DEFAULTS, **saved}
-        except Exception:
-            pass
+        except Exception as e:
+            # Раньше ошибка молча проглатывалась и подставлялись
+            # значения по умолчанию — из-за этого правки config.json
+            # (например, добавленный poppler_path) как будто "не
+            # работали", без единого намёка на причину. Теперь хотя
+            # бы печатаем в консоль, что файл не читается.
+            print(f"[config] Не удалось прочитать {CONFIG_FILE}: {e}")
+            print("[config] Использую значения по умолчанию. Проверьте "
+                  "config.json на опечатки (особенно двойные \\\\ в путях Windows).")
     return dict(DEFAULTS)
 
 

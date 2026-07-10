@@ -42,6 +42,40 @@ def _poppler_kwargs() -> dict:
     return {"poppler_path": p} if p else {}
 
 
+def _diagnose_poppler() -> str:
+    """Возвращает человекочитаемую диагностику — почему pdf2image/
+    Poppler мог не найти pdfinfo/pdftoppm. Используется в сообщениях
+    об ошибках, чтобы не гадать вслепую."""
+    from shutil import which
+    p = (config.CFG.get("poppler_path") or "").strip()
+
+    if not p:
+        found = which("pdfinfo") or which("pdfinfo.exe")
+        if found:
+            return f"poppler_path не задан, но pdfinfo найден в PATH: {found}\n(если ошибка всё равно есть — возможно, найдена не та/битая версия)"
+        return (
+            "poppler_path в config.json не задан, и pdfinfo НЕ найден в "
+            "системном PATH.\nПохоже, Poppler не установлен, либо config.json "
+            "не был сохранён/загружен.\nУкажите путь в config.json:\n"
+            '  "poppler_path": "C:\\\\poppler\\\\poppler-XX.XX.X\\\\Library\\\\bin"'
+        )
+
+    if not os.path.isdir(p):
+        return f"poppler_path указывает на несуществующую папку:\n{p}"
+
+    missing = [name for name in ("pdfinfo.exe", "pdftoppm.exe")
+               if not os.path.isfile(os.path.join(p, name))]
+    if missing:
+        return (
+            f"В папке poppler_path НЕТ файлов: {', '.join(missing)}\n"
+            f"Папка: {p}\n"
+            f"Нужна именно подпапка ...\\Library\\bin из архива Poppler "
+            f"(там должны лежать pdftoppm.exe и pdfinfo.exe)."
+        )
+
+    return f"poppler_path выглядит корректно ({p}), но всё равно ошибка — попробуйте запустить \"{os.path.join(p, 'pdfinfo.exe')}\" -v вручную из cmd."
+
+
 def _label(parent, text, **kw):    return ctk.CTkLabel(
         parent, text=text,
         font=("JetBrains Mono", 10), text_color=("gray40","gray60"),
@@ -335,11 +369,15 @@ class OrderPage(ctk.CTkFrame):
         except Exception as e:
             self._preview_pil_image = None
             err = str(e)
-            self.after(0, lambda: self._preview_canvas.create_text(
+            diag = _diagnose_poppler() if ext == ".pdf" else ""
+            full_msg = f"Не удалось построить превью:\n{err}"
+            if diag:
+                full_msg += f"\n\n— Диагностика —\n{diag}"
+            self.after(0, lambda m=full_msg: self._preview_canvas.create_text(
                 self._preview_canvas.winfo_width() // 2,
                 self._preview_canvas.winfo_height() // 2,
-                text=f"Не удалось построить превью:\n{err}",
-                fill=DANGER, font=("JetBrains Mono", 12), justify="center",
+                text=m,
+                fill=DANGER, font=("JetBrains Mono", 11), justify="center",
             ))
 
     def _save_pending_preview_temp(self, img):
