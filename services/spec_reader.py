@@ -4,6 +4,8 @@
 """
 import re
 import os
+import shutil
+import tempfile
 
 
 def _poppler_kwargs() -> dict:
@@ -15,6 +17,31 @@ def _poppler_kwargs() -> dict:
         return {"poppler_path": p} if p else {}
     except Exception:
         return {}
+
+
+def _convert_pdf_first_page(path: str, dpi: int):
+    """Рендерит первую страницу PDF в картинку через pdf2image/Poppler.
+
+    На Windows pdfinfo/pdftoppm, запущенные из Python через subprocess,
+    нередко не могут открыть файл, если в пути есть кириллица, пробелы
+    или другие не-ASCII символы. Поэтому при первой неудаче делаем
+    копию PDF во временную папку с "безопасным" ASCII-именем и
+    пробуем ещё раз с ней.
+    """
+    from pdf2image import convert_from_path
+    kwargs = dict(dpi=dpi, first_page=1, last_page=1, **_poppler_kwargs())
+    try:
+        return convert_from_path(path, **kwargs)
+    except Exception as first_err:
+        tmp_dir = tempfile.mkdtemp(prefix="imporeader_")
+        try:
+            tmp_pdf = os.path.join(tmp_dir, "source.pdf")
+            shutil.copy2(path, tmp_pdf)
+            return convert_from_path(tmp_pdf, **kwargs)
+        except Exception:
+            raise first_err
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ─── PUBLIC API ──────────────────────────────────────────────────
@@ -217,10 +244,10 @@ def _ocr_image(path: str) -> str:
 
 def _ocr_pdf_scan(path: str) -> str:
     try:
-        from pdf2image import convert_from_path
+        import pdf2image  # noqa: F401 — проверяем, что библиотека установлена
     except ImportError:
         raise RuntimeError("pip install pdf2image + poppler")
-    pages = convert_from_path(path, dpi=250, first_page=1, last_page=1, **_poppler_kwargs())
+    pages = _convert_pdf_first_page(path, dpi=250)
     if not pages:
         return ""
     import tempfile
@@ -284,8 +311,12 @@ def _clean(text: str, is_pdf: bool = False) -> str:
     is_pdf=True — мягкая очистка (нет артефактов рамок).
     is_pdf=False — полная очистка OCR артефактов.
     """
-    # Кириллический х → латинский (для "83х97", "4х4")
-    text = text.replace("х", "x").replace("Х", "x")
+    # Кириллический х → латинский, но ТОЛЬКО между цифрами
+    # ("83х97" → "83x97", "4х4" → "4x4") — раньше заменялось ВЕЗДЕ в
+    # тексте, что ломало обычные русские слова с буквой "х" (например,
+    # "Технические" превращалось в "Теxнические", и регулярка для
+    # "Технические пояснения" переставала находить это поле).
+    text = re.sub(r"(?<=\d)\s*[хХ]\s*(?=\d)", "x", text)
 
     if not is_pdf:
         # Убираем артефакты рамок ячеек характерные для OCR
@@ -430,36 +461,38 @@ def _parse(text: str) -> dict:
     m = re.search(r"вид\s+ламината\s+(.+)", text, re.I)
     d["laminate_type"] = m.group(1).strip().split("\n")[0][:32] if m else None
 
-    # ── Бумага ───────────────────────────────────────────────────
-    m = re.search(r"бумага\s+бло[кк]\s+(\S+)\s+(\d+)", text, re.I)
-    if m:
-        d["paper_block_type"]    = m.group(1).strip(".").strip()
-        d["paper_block_density"] = int(m.group(2))
-    else:
-        d["paper_block_type"] = d["paper_block_density"] = None
+    # ── Бумага (тип + плотность, одной строкой: "мат. 130") ─────────
+    def _paper_after_label(label_pattern: str):
+        # [^\S\n] = пробелы/табы, но НЕ перевод строки — не даём
+        # захватить данные со следующей строки таблицы.
+        m = re.search(
+            label_pattern + r"[^\S\n]+([^\d\n]+?)[^\S\n]+(\d+)",
+            text, re.I
+        )
+        if not m:
+            return None
+        ptype = m.group(1).strip(" .\t")
+        density = m.group(2)
+        return f"{ptype}. {density}" if ptype else density
 
-    m = re.search(r"бумага\s+обл[^.]*\s+(\S+)\s+(\d+)", text, re.I)
-    if m:
-        d["paper_cover_type"]    = m.group(1).strip(".").strip()
-        d["paper_cover_density"] = int(m.group(2))
-    else:
-        d["paper_cover_type"] = d["paper_cover_density"] = None
+    d["paper_block"]  = _paper_after_label(r"бумага\s+бло[кк]\.?")
+    d["paper_cover"]  = _paper_after_label(r"бумага\s+обл\.?(?:\+\s*подл\.?)?")
+    d["paper_insert"] = _paper_after_label(r"бумага\s+вкл\.?")
 
-    # ── Постпечатная обработка ──────────────────────────────────────
-    m = re.search(r"постпечатн(?:ая|ой)\s+обработка\s*[:\-]?\s*(.+)", text, re.I)
-    d["postprocessing"] = m.group(1).strip().split("\n")[0][:200] if m else None
+    # ── Лак ──────────────────────────────────────────────────────
+    m = re.search(r"\bлак[^\S\n]+(.*?)(?=[^\S\n]*ламинат\b|\n|$)", text, re.I)
+    lak = m.group(1).strip(" .\t") if m else ""
+    d["lak"] = lak[:32] if lak else None
 
     # ── Технические пояснения ────────────────────────────────────
-    m = re.search(r"техническ(?:ие|ое)\s+поясн(?:ения|ение)\s*[:\-]?\s*(.+)", text, re.I | re.DOTALL)
-    if m:
-        note = m.group(1).strip()
-        # Обрезаем по следующему разделу спецификации, если попался
-        stop = re.search(r"\n\s*(дата\s+в\s+печать|дата\s+сдачи)", note, re.I)
-        if stop:
-            note = note[: stop.start()]
-        d["tech_notes"] = note.strip()[:500] or None
-    else:
-        d["tech_notes"] = None
+    # Значение всегда на той же строке, что и метка — берём только её,
+    # иначе (как раньше) при пустом поле регэксп "заезжал" на
+    # следующие строки формы ("Вид упаковки", "коробки" и т.п.).
+    m = re.search(
+        r"техническ(?:ие|ое)\s+поясн(?:ения|ение)\s*[:\-]?[^\S\n]+(.+)",
+        text, re.I
+    )
+    d["tech_notes"] = m.group(1).strip()[:500] if m else None
 
     # ── Даты ─────────────────────────────────────────────────────
     d["due_date"]      = _find_date(text, r"дата\s+в\s+печать")

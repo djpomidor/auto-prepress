@@ -42,21 +42,52 @@ def _poppler_kwargs() -> dict:
     return {"poppler_path": p} if p else {}
 
 
-def _diagnose_poppler() -> str:
+def _convert_pdf_first_page(path: str, dpi: int):
+    """Рендерит первую страницу PDF в картинку через pdf2image/Poppler.
+
+    На Windows pdfinfo/pdftoppm, запущенные из Python через subprocess,
+    нередко не могут открыть файл, если в пути есть кириллица, пробелы
+    или другие не-ASCII символы (сам pdfinfo.exe из cmd при этом
+    работает нормально — ошибка возникает именно на стыке с Python).
+    Поэтому при первой неудаче делаем копию PDF во временную папку с
+    "безопасным" ASCII-именем и пробуем ещё раз с ней.
+    """
+    from pdf2image import convert_from_path
+    kwargs = dict(dpi=dpi, first_page=1, last_page=1, **_poppler_kwargs())
+    try:
+        return convert_from_path(path, **kwargs)
+    except Exception as first_err:
+        tmp_dir = tempfile.mkdtemp(prefix="imporeader_")
+        try:
+            tmp_pdf = os.path.join(tmp_dir, "source.pdf")
+            shutil.copy2(path, tmp_pdf)
+            return convert_from_path(tmp_pdf, **kwargs)
+        except Exception:
+            raise first_err  # исходная ошибка информативнее
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _diagnose_poppler(pdf_path: str = None) -> str:
     """Возвращает человекочитаемую диагностику — почему pdf2image/
-    Poppler мог не найти pdfinfo/pdftoppm. Используется в сообщениях
-    об ошибках, чтобы не гадать вслепую."""
+    Poppler мог не найти/не суметь запустить pdfinfo/pdftoppm.
+    Используется в сообщениях об ошибках, чтобы не гадать вслепую."""
     from shutil import which
     p = (config.CFG.get("poppler_path") or "").strip()
 
     if not p:
         found = which("pdfinfo") or which("pdfinfo.exe")
         if found:
-            return f"poppler_path не задан, но pdfinfo найден в PATH: {found}\n(если ошибка всё равно есть — возможно, найдена не та/битая версия)"
+            return (
+                f"poppler_path не задан, но pdfinfo найден в PATH: {found}\n\n"
+                + _probe_pdfinfo(found, pdf_path)
+            )
         return (
             "poppler_path в config.json не задан, и pdfinfo НЕ найден в "
-            "системном PATH.\nПохоже, Poppler не установлен, либо config.json "
-            "не был сохранён/загружен.\nУкажите путь в config.json:\n"
+            "системном PATH.\nПохоже, Poppler не установлен на этом ПК, "
+            "либо config.json не был сохранён/загружен именно на нём "
+            "(config.json — локальный файл для каждого компьютера).\n"
+            "Укажите путь в config.json:\n"
             '  "poppler_path": "C:\\\\poppler\\\\poppler-XX.XX.X\\\\Library\\\\bin"'
         )
 
@@ -73,7 +104,100 @@ def _diagnose_poppler() -> str:
             f"(там должны лежать pdftoppm.exe и pdfinfo.exe)."
         )
 
-    return f"poppler_path выглядит корректно ({p}), но всё равно ошибка — попробуйте запустить \"{os.path.join(p, 'pdfinfo.exe')}\" -v вручную из cmd."
+    # Папка и файлы Poppler на месте — реально запускаем pdfinfo и
+    # смотрим точный код возврата / stdout / stderr. Это отличает
+    # "путь не тот" от "exe есть, но не запускается на этом ПК"
+    # (например, не хватает Visual C++ Redistributable x64, или
+    # разрядность pdfinfo.exe не совпадает с ОС/Python).
+    pdfinfo_exe = os.path.join(p, "pdfinfo.exe")
+    return _probe_pdfinfo(pdfinfo_exe, pdf_path)
+
+
+# Известные коды аварийного завершения процесса Windows (NTSTATUS,
+# показываются как большое положительное число в returncode).
+_WIN_CRASH_CODES = {
+    0xC0000005: (
+        "STATUS_ACCESS_VIOLATION — процесс упал (аналог segfault). "
+        "Дело не в путях и не в PDF-файле: сам pdfinfo.exe/pdftoppm.exe "
+        "крашится при запуске на этом ПК. Обычно помогает: "
+        "1) поставить Microsoft Visual C++ Redistributable (x64) — "
+        "https://aka.ms/vs/17/release/vc_redist.x64.exe и перезагрузить ПК; "
+        "2) перекачать архив Poppler заново и распаковать через 7-Zip "
+        "(битая/неполная распаковка — частая причина); "
+        "3) проверить, не вмешался ли антивирус (карантин/патчинг exe). "
+        "Также стоит посмотреть Просмотр событий Windows → Журналы "
+        "Windows → Приложение → «Отказ приложения» рядом с этим временем "
+        "— там будет указан конкретный виновный DLL-модуль."
+    ),
+    0xC0000135: (
+        "STATUS_DLL_NOT_FOUND — не найдена нужная DLL. Установите "
+        "Microsoft Visual C++ Redistributable (x64): "
+        "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    ),
+    0xC000007B: (
+        "STATUS_INVALID_IMAGE_FORMAT (\"не является приложением Win32\") — "
+        "разрядность exe не подходит для этой системы/Python. Убедитесь, "
+        "что и Poppler, и Python — оба 64-битные (или оба 32-битные)."
+    ),
+}
+
+
+def _decode_win_exit_code(code: int) -> str:
+    if code < 0:
+        code &= 0xFFFFFFFF  # приводим к беззнаковому 32-битному представлению
+    return _WIN_CRASH_CODES.get(code, "")
+
+
+def _probe_pdfinfo(pdfinfo_exe: str, pdf_path: str = None) -> str:
+    import subprocess
+    target = pdf_path if (pdf_path and os.path.isfile(pdf_path)) else None
+    cmd = [pdfinfo_exe] + ([target] if target else ["-v"])
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        return (
+            f"pdfinfo найден ({pdfinfo_exe}), но не запустился из Python: {e}\n\n"
+            "Дело, похоже, не в путях, а в самой установке на этом ПК:\n"
+            "  • проверьте разрядность — 64-битный Python требует "
+            "64-битный Poppler (и наоборот);\n"
+            "  • установите Microsoft Visual C++ Redistributable (x64) — "
+            "без него pdfinfo.exe/pdftoppm.exe часто не запускаются вовсе;\n"
+            "  • на другом ПК, где всё работает, сравните версию Poppler "
+            "(в идеале — используйте одну и ту же на всех ПК)."
+        )
+
+    detail = f"Команда: {' '.join(cmd)}\nКод возврата: {result.returncode}\n"
+
+    crash_explanation = _decode_win_exit_code(result.returncode)
+    if crash_explanation:
+        detail += f"\n⚠ {crash_explanation}\n"
+
+    if result.stdout.strip():
+        detail += f"stdout: {result.stdout.strip()[:400]}\n"
+    if result.stderr.strip():
+        detail += f"stderr: {result.stderr.strip()[:400]}\n"
+
+    if crash_explanation:
+        pass  # объяснение уже дано выше
+    elif result.returncode != 0:
+        detail += (
+            "\npdfinfo запустился, но завершился с ошибкой — смотрите "
+            "stderr выше. Если файл не открылся именно у pdfinfo — "
+            "возможно, сам PDF повреждён/запаролен."
+        )
+    else:
+        detail += (
+            "\npdfinfo отработал успешно (!) — странно, что pdf2image "
+            "сообщает об ошибке. Возможно, проблема именно в связке "
+            "pdf2image/Python на этом ПК: попробуйте переустановить "
+            "pdf2image (`pip install --force-reinstall pdf2image`) и "
+            "убедиться, что используется тот же venv/Python, что и "
+            "запускает приложение."
+        )
+    return detail
 
 
 def _label(parent, text, **kw):    return ctk.CTkLabel(
@@ -116,11 +240,14 @@ class OrderPage(ctk.CTkFrame):
         self.v_color_block  = tk.StringVar()
         self.v_color_cover  = tk.StringVar()
         self.v_color_insert = tk.StringVar()
+        self.v_paper_block  = tk.StringVar()
+        self.v_paper_cover  = tk.StringVar()
+        self.v_paper_insert = tk.StringVar()
+        self.v_lak          = tk.StringVar()
         self.v_delivery = tk.StringVar()
         self.v_submit   = tk.StringVar()
         self.v_due      = tk.StringVar()
-        # Многострочные поля — свои Textbox-виджеты (создаются в _build_form)
-        self.txt_postprocessing = None
+        # Многострочное поле "Технические пояснения" — создаётся в _build_form
         self.txt_tech_notes     = None
 
         self._build()
@@ -347,11 +474,7 @@ class OrderPage(ctk.CTkFrame):
         try:
             from PIL import Image
             if ext == ".pdf":
-                from pdf2image import convert_from_path
-                pages = convert_from_path(
-                    path, dpi=150, first_page=1, last_page=1,
-                    **_poppler_kwargs()
-                )
+                pages = _convert_pdf_first_page(path, dpi=150)
                 if not pages:
                     return
                 img = pages[0]
@@ -369,7 +492,7 @@ class OrderPage(ctk.CTkFrame):
         except Exception as e:
             self._preview_pil_image = None
             err = str(e)
-            diag = _diagnose_poppler() if ext == ".pdf" else ""
+            diag = _diagnose_poppler(path) if ext == ".pdf" else ""
             full_msg = f"Не удалось построить превью:\n{err}"
             if diag:
                 full_msg += f"\n\n— Диагностика —\n{diag}"
@@ -414,11 +537,7 @@ class OrderPage(ctk.CTkFrame):
         if not folder_path or os.path.splitext(pdf_path)[1].lower() != ".pdf":
             return None
         try:
-            from pdf2image import convert_from_path
-            pages = convert_from_path(
-                pdf_path, dpi=150, first_page=1, last_page=1,
-                **_poppler_kwargs()
-            )
+            pages = _convert_pdf_first_page(pdf_path, dpi=150)
             if not pages:
                 return None
             stem = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -496,6 +615,10 @@ class OrderPage(ctk.CTkFrame):
             ("Красочность блока",    self.v_color_block,   "напр. 4+4"),
             ("Красочность обложки",  self.v_color_cover,   "напр. 4+0"),
             ("Красочность вклейки",  self.v_color_insert,  "напр. 4+4"),
+            ("Бумага блок",          self.v_paper_block,   "напр. офсет. 80"),
+            ("Бумага обл.+подл.",    self.v_paper_cover,   "напр. мат. 200"),
+            ("Бумага вкл.",          self.v_paper_insert,  "если есть"),
+            ("Лак",                  self.v_lak,           "если есть"),
         ]
 
         for i, (label, var, hint) in enumerate(fields):
@@ -511,17 +634,10 @@ class OrderPage(ctk.CTkFrame):
                 fg_color=("gray85","gray20"), border_width=1,
             ).pack(fill="x", pady=(2, 0))
 
-        # ── Постпечатная обработка / Технические пояснения ────────
-        # Многострочные поля, во всю ширину сайдбара
+        # ── Технические пояснения ──────────────────────────────────
+        # Многострочное поле, во всю ширину сайдбара
         multiline_sec = ctk.CTkFrame(parent, fg_color="transparent")
         multiline_sec.pack(fill="x", padx=20, pady=(10, 0))
-
-        _label(multiline_sec, "Постпечатная обработка").pack(anchor="w", pady=(0, 2))
-        self.txt_postprocessing = ctk.CTkTextbox(
-            multiline_sec, height=54, font=("JetBrains Mono", 12),
-            fg_color=("gray85","gray20"), border_width=1, wrap="word",
-        )
-        self.txt_postprocessing.pack(fill="x", pady=(0, 10))
 
         _label(multiline_sec, "Технические пояснения").pack(anchor="w", pady=(0, 2))
         self.txt_tech_notes = ctk.CTkTextbox(
@@ -529,26 +645,6 @@ class OrderPage(ctk.CTkFrame):
             fg_color=("gray85","gray20"), border_width=1, wrap="word",
         )
         self.txt_tech_notes.pack(fill="x", pady=(0, 4))
-
-        # ── Даты ────────────────────────────────────────────────────
-        dates_sec = ctk.CTkFrame(parent, fg_color="transparent")
-        dates_sec.pack(fill="x", padx=20, pady=(10, 0))
-        dates_sec.grid_columnconfigure(1, weight=1)
-
-        date_fields = [
-            ("Дата выхода",    self.v_delivery, "ДД.ММ.ГГГГ"),
-            ("Сдача файлов",   self.v_submit,   "ДД.ММ.ГГГГ"),
-            ("Дата в печать",  self.v_due,      "ДД.ММ.ГГГГ"),
-        ]
-        for row, (label, var, hint) in enumerate(date_fields):
-            _label(dates_sec, label).grid(row=row, column=0, sticky="w",
-                                          pady=5, padx=(0, 16))
-            ctk.CTkEntry(
-                dates_sec, textvariable=var,
-                placeholder_text=hint,
-                font=("JetBrains Mono", 13),
-                fg_color=("gray85","gray20"), border_width=1,
-            ).grid(row=row, column=1, sticky="ew", pady=5)
 
     # ── ACTION BUTTONS ────────────────────────────────────────────
     def _build_action_buttons(self, parent):
@@ -711,9 +807,11 @@ class OrderPage(ctk.CTkFrame):
         self.v_color_block.set(o.color_block or "")
         self.v_color_cover.set(o.color_cover or "")
         self.v_color_insert.set(o.color_insert or "")
+        self.v_paper_block.set(o.paper_block or "")
+        self.v_paper_cover.set(o.paper_cover or "")
+        self.v_paper_insert.set(o.paper_insert or "")
+        self.v_lak.set(o.lak or "")
 
-        self.txt_postprocessing.delete("1.0", "end")
-        self.txt_postprocessing.insert("1.0", o.postprocessing or "")
         self.txt_tech_notes.delete("1.0", "end")
         self.txt_tech_notes.insert("1.0", o.tech_notes or "")
 
@@ -904,9 +1002,10 @@ class OrderPage(ctk.CTkFrame):
         if data.get("color_block"):  self.v_color_block.set(data["color_block"])
         if data.get("color_cover"):  self.v_color_cover.set(data["color_cover"])
         if data.get("color_insert"): self.v_color_insert.set(data["color_insert"])
-        if data.get("postprocessing"):
-            self.txt_postprocessing.delete("1.0", "end")
-            self.txt_postprocessing.insert("1.0", data["postprocessing"])
+        if data.get("paper_block"):  self.v_paper_block.set(data["paper_block"])
+        if data.get("paper_cover"):  self.v_paper_cover.set(data["paper_cover"])
+        if data.get("paper_insert"): self.v_paper_insert.set(data["paper_insert"])
+        if data.get("lak"):          self.v_lak.set(data["lak"])
         if data.get("tech_notes"):
             self.txt_tech_notes.delete("1.0", "end")
             self.txt_tech_notes.insert("1.0", data["tech_notes"])
@@ -992,7 +1091,10 @@ class OrderPage(ctk.CTkFrame):
             o.color_block  = self.v_color_block.get().strip() or None
             o.color_cover  = self.v_color_cover.get().strip() or None
             o.color_insert = self.v_color_insert.get().strip() or None
-            o.postprocessing = self.txt_postprocessing.get("1.0", "end").strip() or None
+            o.paper_block  = self.v_paper_block.get().strip() or None
+            o.paper_cover  = self.v_paper_cover.get().strip() or None
+            o.paper_insert = self.v_paper_insert.get().strip() or None
+            o.lak          = self.v_lak.get().strip() or None
             o.tech_notes     = self.txt_tech_notes.get("1.0", "end").strip() or None
 
             session.commit()
@@ -1086,7 +1188,10 @@ class OrderPage(ctk.CTkFrame):
                 ("color_block",  o.color_block or ""),
                 ("color_cover",  o.color_cover or ""),
                 ("color_insert", o.color_insert or ""),
-                ("postprocessing", o.postprocessing or ""),
+                ("paper_block",  o.paper_block or ""),
+                ("paper_cover",  o.paper_cover or ""),
+                ("paper_insert", o.paper_insert or ""),
+                ("lak",          o.lak or ""),
                 ("tech_notes",     o.tech_notes or ""),
             ]:
                 el = ET.SubElement(root_el, tag)

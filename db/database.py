@@ -50,7 +50,6 @@ def _migrate_extra_columns():
     extra = [
         ("printery_order", "folder_path",     "VARCHAR(256)"),
         ("printery_order", "monitoring",      "BOOLEAN DEFAULT 0"),
-        ("printery_order", "spec_path",       "VARCHAR(256)"),
         ("printery_order", "description",     "VARCHAR(64)"),
         ("printery_order", "pages_block",     "INTEGER"),
         ("printery_order", "pages_cover",     "INTEGER"),
@@ -60,6 +59,10 @@ def _migrate_extra_columns():
         ("printery_order", "color_insert",    "VARCHAR(16)"),
         ("printery_order", "postprocessing",  "TEXT"),
         ("printery_order", "tech_notes",      "TEXT"),
+        ("printery_order", "paper_block",     "VARCHAR(64)"),
+        ("printery_order", "paper_cover",     "VARCHAR(64)"),
+        ("printery_order", "paper_insert",    "VARCHAR(64)"),
+        ("printery_order", "lak",             "VARCHAR(32)"),
         ("printery_order", "spec_path",       "VARCHAR(256)"),
     ]
     with _engine.connect() as conn:
