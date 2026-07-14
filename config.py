@@ -26,6 +26,10 @@ DEFAULTS = {
     ],
     "pitstop_in":  r"D:\\Pitstop_\\out",
     "pitstop_log": r"D:\\Pitstop_\\Log",
+    # Куда PitStop Server кладёт ОРИГИНАЛЬНЫЙ файл + XML лог, когда
+    # ошибок НЕ найдено (это отдельная папка от pitstop_log, куда
+    # логи об ошибках не попадают вообще).
+    "pitstop_ok":  r"D:\\Pitstop_\\Ok",
 
     # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
     "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
@@ -35,7 +39,7 @@ DEFAULTS = {
     # добавлена в системный PATH, например:
     #   r"C:\poppler\poppler-24.08.0\Library\bin"
     # Оставьте "" если Poppler уже в PATH.
-    "poppler_path": r"C:\poppler\poppler-26.02.0\Library\bin",
+    "poppler_path": r"",
 
     # ── Prinergy Evo Refine (общая hot-папка на все заказы) ──────────
     # Куда копируются "сырые" PDF заказчика для рефайна. Файл
@@ -43,7 +47,7 @@ DEFAULTS = {
     # общая hot-папка Prinergy, настроенная на ОДИН процесс-шаблон
     # Refine to PDF с фиксированным (Direct) путём вывода результата
     # в prinergy_refine_out (тем же для всех заказов).
-    "prinergy_refine_in": r"P:\_PrinergyRefined",
+    "prinergy_refine_in": r"",
 
     # Куда Prinergy Evo кладёт отрефайненные файлы (общая для всех
     # заказов папка — задаётся как Direct output path в разделе File
@@ -51,7 +55,7 @@ DEFAULTS = {
     # prinergy_refine_in). ImpoFlow сам следит за этой папкой
     # (RefineRouter) и по префиксу "<папка_заказа>~~" в имени файла
     # раскладывает результат обратно в in\ нужного заказа.
-    "prinergy_refine_out": r"p:\_PrinergyRefined\Вывод",
+    "prinergy_refine_out": r"",
 
     # ── Ollama ────────────────────────────────────────────────────
     "ollama_url":   "http://localhost:11434/api/generate",

@@ -1297,11 +1297,9 @@ class OrderPage(ctk.CTkFrame):
                 return
         except Exception:
             return
-        import config as cfg
-        from services.pitstop_parser import list_pitstop_reports, check_mismatch
+        from services.pitstop_parser import list_pitstop_reports_for_order, check_mismatch
         folder_name = os.path.basename(self.order.folder_path)
-        log_dir = os.path.join(cfg.CFG["pitstop_log"], folder_name)
-        reports = list_pitstop_reports(log_dir)
+        reports = list_pitstop_reports_for_order(folder_name)
         self._render_pitstop_reports(reports)
         self._update_mismatch_bar(reports[0] if reports else None)
 
