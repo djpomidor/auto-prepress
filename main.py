@@ -1,5 +1,5 @@
 """
-ImpoReader Desktop v1.0
+ImpoFlow Desktop v1.0
 Запуск: python main.py
 """
 import sys
