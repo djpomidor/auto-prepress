@@ -1,22 +1,34 @@
 """
-Мониторинг папки P:\\<order>\\in.
+Мониторинг папки P:\\<order>\\in + маршрутизация файлов через общую
+hot-папку Prinergy Evo Refine.
 
 Пайплайн:
   1. Новый "сырой" PDF от заказчика в in\\:
-       а) отправляется в hot-папку Prinergy Evo Refine
-          (config.prinergy_refine_in);
+       а) отправляется в ОБЩУЮ (одну на всё приложение) hot-папку
+          Prinergy Evo Refine (config.prinergy_refine_in). Так как
+          hot-папка общая для всех заказов, имя файла дополняется
+          префиксом "<папка_заказа>~~" — чтобы потом можно было
+          понять, какому заказу принадлежит результат;
        б) ОДНОВРЕМЕННО отправляется на проверку в PitStop —
           проверяется именно файл заказчика, отрефайненные файлы
           PitStop больше не проверяет.
-  2. Результат проверки (ошибки есть / нет) запоминается по "стему"
-     имени файла (без расширения), например "block" для "block.pdf".
-  3. Prinergy обрабатывает файл и кладёт результат ОБРАТНО в ту же
-     папку in\\ (так настроена сама hot-папка Prinergy):
-       многостраничный  → block.p0001.pdf, block.p0002.pdf, ...
-       одностраничный   → календарь.новый.pdf
-  4. Когда такой отрефайненный файл появляется — PitStop НЕ вызываем.
-     Смотрим на сохранённый результат проверки исходного файла с тем
-     же "стемом":
+  2. Результат проверки PitStop (ошибки есть/нет) запоминается по
+     "стему" исходного имени файла (без расширения и без префикса),
+     например "block" для "block.pdf".
+  3. Prinergy обрабатывает файл и кладёт результат в свою общую папку
+     вывода (config.prinergy_refine_out):
+       многостраничный  → 0913_Заказ~~block.p0001.pdf, ...p0002.pdf...
+       одностраничный   → 0913_Заказ~~календарь.новый.pdf
+     Класс RefineRouter (отдельный, общий на всё приложение — не
+     привязан к конкретному заказу) следит за этой папкой, по
+     префиксу "<папка_заказа>~~" определяет нужный заказ, СНИМАЕТ
+     префикс и переносит файл обратно в его in\\ под чистым именем
+     (block.p0001.pdf). Дальше это уже подхватывает обычный
+     FolderMonitor этого заказа — как если бы Prinergy сама вернула
+     файл прямо в in\\.
+  4. Когда очищенный отрефайненный файл появляется в in\\ — PitStop НЕ
+     вызываем повторно. Смотрим на сохранённый результат проверки
+     исходного файла с тем же "стемом":
        ошибок не было → переносим файл из in\\ в корень папки заказа;
        были ошибки    → оставляем файл в in\\ как есть.
   5. Если исходный файл заказчика в in\\ изменился (новый размер/дата
@@ -41,7 +53,14 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# Имена файлов, которые Prinergy Evo кладёт обратно после Refine
+# Разделитель между именем папки заказа и исходным именем файла,
+# добавляется при отправке в общую hot-папку Prinergy Refine, чтобы
+# потом сопоставить результат с нужным заказом. Символы "~~" валидны
+# в именах файлов Windows и практически никогда не встречаются в
+# реальных именах файлов заказчиков.
+PREFIX_SEP = "~~"
+
+# Имена файлов, которые Prinergy Evo кладёт после Refine
 _REFINED_MULTI  = re.compile(r"^(?P<stem>.+)\.p(?P<num>\d{4,})\.pdf$", re.IGNORECASE)
 _REFINED_SINGLE = re.compile(r"^(?P<stem>.+)\.новый\.pdf$", re.IGNORECASE)
 
@@ -52,6 +71,27 @@ def _refined_match(fname: str):
 
 def _is_refined(fname: str) -> bool:
     return bool(_refined_match(fname))
+
+
+def _wait_file_stable_path(path: str, stable_secs: float = 2.0):
+    """Ждём пока размер файла перестанет меняться (общая функция,
+    используется и FolderMonitor, и RefineRouter)."""
+    prev_size = -1
+    unchanged = 0
+    for _ in range(60):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            time.sleep(1)
+            continue
+        if size > 0 and size == prev_size:
+            unchanged += 1
+            if unchanged >= 2:
+                return
+        else:
+            unchanged = 0
+        prev_size = size
+        time.sleep(stable_secs)
 
 
 class FolderMonitor:
@@ -250,12 +290,14 @@ class FolderMonitor:
 
         stem = os.path.splitext(fname)[0]
 
-        # 1) Отправляем в Prinergy Refine
+        # 1) Отправляем в Prinergy Refine — с префиксом папки заказа,
+        #    т.к. hot-папка ОБЩАЯ для всех заказов (см. RefineRouter)
         refine_in = config.CFG.get("prinergy_refine_in", "")
         if refine_in:
             try:
                 os.makedirs(refine_in, exist_ok=True)
-                dst = os.path.join(refine_in, fname)
+                prefixed_name = f"{self.order_folder_name}{PREFIX_SEP}{fname}"
+                dst = os.path.join(refine_in, prefixed_name)
                 if os.path.exists(dst):
                     log.info(f"Уже отправлен в Refine ранее: {dst}")
                 else:
@@ -370,20 +412,141 @@ class FolderMonitor:
     # ── ОБЩЕЕ ─────────────────────────────────────────────────────
     def _wait_file_stable(self, path: str, stable_secs: float = 2.0):
         """Ждём пока размер файла перестанет меняться."""
-        prev_size = -1
-        unchanged = 0
-        for _ in range(60):
+        _wait_file_stable_path(path, stable_secs)
+
+
+class RefineRouter:
+    """
+    Общий (НЕ привязанный к конкретному заказу) наблюдатель за папкой,
+    куда Prinergy Evo Refine складывает отрефайненные файлы
+    (config.prinergy_refine_out) — одна hot-папка Prinergy обслуживает
+    все заказы сразу.
+
+    Имя каждого отрефайненного файла начинается с префикса
+    "<папка_заказа>~~" (см. FolderMonitor._handle_raw_file — именно
+    так файл был отправлен на Refine). RefineRouter:
+      1. по префиксу определяет папку нужного заказа;
+      2. проверяет, что такая папка реально существует на диске;
+      3. снимает префикс и переносит файл в in\\ этого заказа под
+         чистым именем — дальше его подхватывает обычный
+         FolderMonitor этого заказа, как будто Prinergy сама вернула
+         файл прямо в in\\.
+
+    Запускается один раз при старте приложения (см. MonitorManager),
+    независимо от того, для каких заказов включён мониторинг —
+    маршрутизация Refine-результатов не должна зависеть от тумблера
+    "Мониторинг" на конкретном заказе.
+    """
+
+    def __init__(self):
+        self._observer   = None
+        self._processing = set()
+        self.out_dir      = None
+
+    def start(self):
+        import config
+
+        out_dir = (config.CFG.get("prinergy_refine_out") or "").strip()
+        if not out_dir:
+            log.warning(
+                "prinergy_refine_out не задан в config.json — "
+                "маршрутизация отрефайненных файлов от Prinergy ОТКЛЮЧЕНА"
+            )
+            return
+
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception as e:
+            log.error(f"RefineRouter: не удалось открыть/создать {out_dir}: {e}")
+            return
+        self.out_dir = out_dir
+
+        try:
+            from watchdog.observers.polling import PollingObserver
+            from watchdog.events import FileSystemEventHandler
+        except ImportError:
+            raise RuntimeError("pip install watchdog")
+
+        router = self
+
+        class Handler(FileSystemEventHandler):
+            def on_created(self, event):
+                router._on_fs_event(event.src_path)
+
+            def on_modified(self, event):
+                router._on_fs_event(event.src_path)
+
+            def on_moved(self, event):
+                router._on_fs_event(event.dest_path)
+
+        self._observer = PollingObserver(timeout=5)
+        self._observer.schedule(Handler(), out_dir, recursive=False)
+        self._observer.start()
+        log.info(f"RefineRouter запущен (PollingObserver, 5 сек): {out_dir}")
+
+        # Файлы, которые уже лежали в папке на момент старта — тоже
+        # нужно разложить по заказам (см. аналогичную логику в
+        # FolderMonitor.start / _process_existing_files).
+        self._process_existing()
+
+    def stop(self):
+        if self._observer:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
+            log.info("RefineRouter остановлен")
+
+    def _process_existing(self):
+        if not self.out_dir or not os.path.isdir(self.out_dir):
+            return
+        for fname in os.listdir(self.out_dir):
+            if fname.lower().endswith(".pdf"):
+                self._on_fs_event(os.path.join(self.out_dir, fname))
+
+    def _on_fs_event(self, path: str):
+        if not path.lower().endswith(".pdf"):
+            return
+        fname = os.path.basename(path)
+        if fname in self._processing:
+            return
+        self._processing.add(fname)
+        threading.Thread(target=self._route, args=(path, fname), daemon=True).start()
+
+    def _route(self, path: str, fname: str):
+        try:
+            _wait_file_stable_path(path)
+
+            if not os.path.isfile(path):
+                return  # файл уже унесли (двойное срабатывание события)
+
+            if PREFIX_SEP not in fname:
+                log.warning(
+                    f"RefineRouter: файл без префикса заказа, "
+                    f"не могу определить получателя, пропускаю: {fname}"
+                )
+                return
+
+            order_folder, real_name = fname.split(PREFIX_SEP, 1)
+
+            import config
+            orders_root = config.CFG.get("orders_root", "")
+            target_dir = os.path.join(orders_root, order_folder)
+            if not os.path.isdir(target_dir):
+                log.error(
+                    f"RefineRouter: папка заказа '{order_folder}' не найдена "
+                    f"на диске — файл {fname} остаётся в {self.out_dir}"
+                )
+                return
+
+            in_dir = os.path.join(target_dir, "in")
             try:
-                size = os.path.getsize(path)
-            except OSError:
-                time.sleep(1)
-                continue
-            if size > 0 and size == prev_size:
-                unchanged += 1
-                if unchanged >= 2:
-                    log.debug(f"Файл стабилен ({size} байт): {path}")
-                    return
-            else:
-                unchanged = 0
-            prev_size = size
-            time.sleep(stable_secs)
+                os.makedirs(in_dir, exist_ok=True)
+                dst = os.path.join(in_dir, real_name)
+                shutil.move(path, dst)
+                log.info(f"✓ RefineRouter: {fname} → {dst}")
+            except Exception as e:
+                log.error(f"RefineRouter: не удалось перенести {fname} в {in_dir}: {e}")
+        except Exception as e:
+            log.error(f"RefineRouter: ошибка маршрутизации {fname}: {e}")
+        finally:
+            self._processing.discard(fname)
