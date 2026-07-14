@@ -17,7 +17,7 @@ class App(ctk.CTk):
         super().__init__()
         self.cfg = config.CFG
 
-        self.title("ImpoReader")
+        self.title("ImpoFlow")
         w, h = self.cfg["window_width"], self.cfg["window_height"]
         self.geometry(f"{w}x{h}")
         self.minsize(1100, 700)
@@ -56,7 +56,7 @@ class App(ctk.CTk):
             text_color=("#2d7a00", "#c8f135"),
         ).pack(side="left", padx=(20, 0))
         ctk.CTkLabel(
-            header, text="Reader",
+            header, text="Flow",
             font=("JetBrains Mono", 18),
         ).pack(side="left")
         ctk.CTkLabel(

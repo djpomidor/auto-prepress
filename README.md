@@ -1,4 +1,4 @@
-# ImpoReader Desktop v1.0
+# ImpoFlow Desktop v1.0
 
 ## Установка
 
