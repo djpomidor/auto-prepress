@@ -20,10 +20,31 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 
 
+def list_pitstop_reports_for_order(order_folder_name: str) -> list:
+    """
+    Возвращает ВСЕ отчёты PitStop для заказа — и из pitstop_log
+    (туда попадают проверки С ошибками), и из pitstop_ok (туда
+    PitStop Server кладёт оригинал файла + XML, когда ошибок НЕТ —
+    это отдельная папка, pitstop_log при этом не используется вообще).
+    Объединённый список отсортирован от новых к старым.
+    """
+    import config
+    dirs = [
+        os.path.join(config.CFG.get("pitstop_log", ""), order_folder_name),
+        os.path.join(config.CFG.get("pitstop_ok", ""),  order_folder_name),
+    ]
+    reports = []
+    for d in dirs:
+        if d and os.path.isdir(d):
+            reports.extend(list_pitstop_reports(d))
+    reports.sort(key=lambda r: r["dt"], reverse=True)
+    return reports
+
+
 def list_pitstop_reports(log_dir: str) -> list:
     """
     Возвращает список отчётов PitStop в папке лога, отсортированный
-    от новых к старым (по времени изменения файла).
+    от новых к старым (по времени проверки).
     Каждый элемент:
       {
         "fname": "...", "xml_path": "...", "pdf_path": "..." | None,
@@ -44,7 +65,6 @@ def list_pitstop_reports(log_dir: str) -> list:
             mtime = os.path.getmtime(path)
         except OSError:
             continue
-        dt = datetime.datetime.fromtimestamp(mtime)
 
         try:
             tree = ET.parse(path)
@@ -52,12 +72,35 @@ def list_pitstop_reports(log_dir: str) -> list:
         except ET.ParseError:
             continue
 
+        # Дата/время проверки — берём из самого отчёта
+        # (<ProcessInfo><PreflightDateTime>), это точнее, чем дата
+        # изменения файла (которая "плывёт" при копировании файлов
+        # между папками). Если вдруг отсутствует — берём mtime.
+        dt = None
+        dt_el = root.find(".//ProcessInfo/PreflightDateTime")
+        if dt_el is not None and dt_el.text:
+            try:
+                dt = datetime.datetime.fromisoformat(dt_el.text.strip())
+                dt = dt.replace(tzinfo=None)  # чтобы сравнение с naive mtime не падало
+            except ValueError:
+                dt = None
+        if dt is None:
+            dt = datetime.datetime.fromtimestamp(mtime)
+
         report_el = root.find(".//PreflightReport")
         errors   = int(report_el.get("errors", "0"))   if report_el is not None and report_el.get("errors", "0").isdigit()   else 0
         warnings = int(report_el.get("warnings", "0")) if report_el is not None and report_el.get("warnings", "0").isdigit() else 0
 
         page_sizes = _extract_page_sizes(root)
-        page_count = len({p for pages in page_sizes.values() for p in pages})
+
+        # Кол-во полос — берём из <GeneralDocInfo><DocumentProperties>
+        # <NumPages>, это надёжнее, чем считать по TrimBox (TrimBox
+        # может быть не определён на части страниц).
+        num_pages_el = root.find(".//GeneralDocInfo/DocumentProperties/NumPages")
+        if num_pages_el is not None and (num_pages_el.text or "").strip().isdigit():
+            page_count = int(num_pages_el.text.strip())
+        else:
+            page_count = len({p for pages in page_sizes.values() for p in pages})
 
         # Ищем PDF-версию того же отчёта рядом (стандартная выгрузка
         # Enfocus PitStop Server кладёт .xml и .pdf с одинаковым именем)
@@ -186,22 +229,71 @@ def _format_item(item) -> str:
 
 def _extract_page_sizes(root) -> dict:
     """
-    Пытается извлечь размеры страниц из разных мест XML.
+    Извлекает обрезной формат (TrimBox) по страницам из блока
+    PageBoxInfo — это реальная структура отчёта Enfocus PitStop
+    Server v3:
+
+      <EnfocusReport version="3.0" unit="mm">
+        <PageBoxInfo pageBoxesEqual="true">
+          <Page index="1" rotate="0" scaling="1">
+            <TrimBox defined="true" width="326" height="245" .../>
+          </Page>
+        </PageBoxInfo>
+      </EnfocusReport>
+
+    ВАЖНО: единица измерения (мм или пункты) указана в атрибуте
+    unit корневого элемента EnfocusReport, а не отдельно на каждом
+    Page/TrimBox — раньше это не учитывалось, из-за чего формат
+    определялся неверно.
+
     Возвращает {size_str: [page_numbers]}.
     """
     sizes = defaultdict(list)
+    unit = (root.get("unit") or "pt").strip().lower()
 
-    # Вариант 1: <PageInfo page="N" width="W" height="H" unit="mm">
+    def _to_mm(value: float) -> float:
+        if unit in ("pt", "point", "points"):
+            return round(value / 2.8346, 1)
+        # unit == "mm" (или что-то ещё — считаем, что уже в мм)
+        return round(value, 1)
+
+    for page_el in root.findall(".//PageBoxInfo/Page"):
+        idx = page_el.get("index")
+        if not idx or not idx.isdigit():
+            continue
+
+        trim = page_el.find("TrimBox")
+        if trim is None or trim.get("defined") == "false":
+            continue
+
+        w = trim.get("width")
+        h = trim.get("height")
+        if not w or not h:
+            continue
+
+        try:
+            wf = _to_mm(float(w))
+            hf = _to_mm(float(h))
+            sizes[f"{wf}×{hf} мм"].append(int(idx))
+        except (ValueError, TypeError):
+            pass
+
+    if sizes:
+        return dict(sizes)
+
+    # ── Фоллбэк на случай другой версии/схемы отчёта ────────────────
+    # (старые варианты поиска — на случай, если PageBoxInfo в
+    # конкретном отчёте отсутствует)
     for pi in root.findall(".//PageInfo"):
         page = pi.get("page")
         w    = pi.get("width") or pi.get("mediaWidth")
         h    = pi.get("height") or pi.get("mediaHeight")
-        unit = pi.get("unit", "pt")
+        pi_unit = pi.get("unit", unit)
         if page and w and h:
             try:
                 wf = float(w)
                 hf = float(h)
-                if unit == "pt":
+                if pi_unit in ("pt", "point", "points"):
                     wf = round(wf / 2.8346, 1)
                     hf = round(hf / 2.8346, 1)
                 else:
@@ -211,7 +303,6 @@ def _extract_page_sizes(root) -> dict:
             except (ValueError, TypeError):
                 pass
 
-    # Вариант 2: <Page number="N"><TrimBox width="W" height="H"/></Page>
     for page_el in root.findall(".//Page"):
         page = page_el.get("number") or page_el.get("index")
         tb   = page_el.find("TrimBox") or page_el.find("MediaBox")

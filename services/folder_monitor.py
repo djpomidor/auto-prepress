@@ -326,9 +326,8 @@ class FolderMonitor:
             log.error(f"Не удалось скопировать {fname} в PitStop: {e}")
             return
 
-        log_dir = os.path.join(config.CFG["pitstop_log"], self.order_folder_name)
-        log.info(f"Жду результат PitStop для {fname} в: {log_dir}")
-        result = self._wait_for_pitstop_result(log_dir, fname, timeout=600)
+        log.info(f"Жду результат PitStop для {fname} (папки Log и Ok)")
+        result = self._wait_for_pitstop_result(self.order_folder_name, fname, timeout=600)
 
         if result is True:
             self._mark_stem_status(stem, path, "ok")
@@ -340,6 +339,7 @@ class FolderMonitor:
             log.warning(f"Таймаут ожидания PitStop для {fname}")
 
         if self.callback:
+            log_dir = os.path.join(config.CFG["pitstop_log"], self.order_folder_name)
             self.callback(log_dir)
 
     # ── ОТРЕФАЙНЕННЫЙ ФАЙЛ: без PitStop, решение по статусу родителя ─
@@ -371,21 +371,25 @@ class FolderMonitor:
             time.sleep(3)
         return None
 
-    def _wait_for_pitstop_result(self, log_dir: str, fname: str, timeout: int = 600):
+    def _wait_for_pitstop_result(self, order_folder_name: str, fname: str, timeout: int = 600):
         """
-        Ждём новый XML лог PitStop для файла заказчика и возвращаем:
+        Ждём новый XML лог PitStop для файла заказчика — сразу в ДВУХ
+        местах: pitstop_log (туда попадают проверки С ошибками) и
+        pitstop_ok (туда PitStop Server кладёт оригинал + XML, когда
+        ошибок НЕТ — pitstop_log в этом случае вообще не используется).
+        Возвращаем:
           True  — ошибок не найдено
           False — есть ошибки
-          None  — таймаут, лог не появился
+          None  — таймаут, лог не появился ни там, ни там
         """
-        from services.pitstop_parser import list_pitstop_reports
+        from services.pitstop_parser import list_pitstop_reports_for_order
 
         stem = os.path.splitext(fname)[0]
         deadline = time.time() + timeout
-        seen_before = {r["fname"] for r in list_pitstop_reports(log_dir)}
+        seen_before = {r["fname"] for r in list_pitstop_reports_for_order(order_folder_name)}
 
         while time.time() < deadline:
-            reports = list_pitstop_reports(log_dir)
+            reports = list_pitstop_reports_for_order(order_folder_name)
             new = [r for r in reports if r["fname"] not in seen_before]
             if new:
                 # Предпочитаем отчёт с тем же именем (без расширения),
