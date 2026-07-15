@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImpoReader v0.4</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f0f0f;--sf:#1a1a1a;--sf2:#242424;--bd:#2e2e2e;--bd2:#3a3a3a;--tx:#e8e8e8;--tx2:#888;--tx3:#555;--ac:#c8f135;--ac2:#9bc429;--er:#ff5555;--in:#55aaff;--wn:#ffaa33;--mn:'IBM Plex Mono',monospace;--sn:'IBM Plex Sans',sans-serif}
+body{background:var(--bg);color:var(--tx);font-family:var(--sn);font-size:14px;min-height:100vh;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:10px;padding:11px 18px;border-bottom:1px solid var(--bd);background:var(--sf)}
+.logo{font-family:var(--mn);font-size:15px;font-weight:500;color:var(--ac)}.logo span{color:var(--tx2)}
+.badge{font-family:var(--mn);font-size:9px;padding:2px 7px;border:1px solid var(--bd2);border-radius:2px;color:var(--tx3);letter-spacing:1px}
+.badge.hi{color:var(--ac);border-color:var(--ac2)}
+/* ENGINE SWITCHER */
+.eng-sw{display:flex;background:var(--sf2);border:1px solid var(--bd2);border-radius:4px;overflow:hidden;margin-left:auto}
+.eng-btn{font-family:var(--mn);font-size:10px;padding:5px 12px;border:none;background:transparent;color:var(--tx3);cursor:pointer;transition:all .15s;letter-spacing:.5px}
+.eng-btn.active{background:var(--ac);color:#0f0f0f;font-weight:500}
+.eng-btn:hover:not(.active){color:var(--tx);background:var(--bd)}
+main{flex:1;display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 47px);overflow:hidden}
+.pl{border-right:1px solid var(--bd);display:flex;flex-direction:column;overflow-y:auto}
+.ps{padding:13px;border-bottom:1px solid var(--bd)}
+.lbl{font-family:var(--mn);font-size:9px;letter-spacing:1.5px;color:var(--tx3);margin-bottom:7px;text-transform:uppercase}
+.upz{border:1.5px dashed var(--bd2);border-radius:4px;padding:14px;text-align:center;cursor:pointer;background:var(--sf2);position:relative;transition:all .15s}
+.upz:hover,.upz.drag{border-color:var(--ac);background:#1e2a0a}
+.upz input{position:absolute;inset:0;opacity:0;cursor:pointer}
+#pw{display:none;position:relative;border-radius:3px;overflow:hidden;background:#111}
+#pi{width:100%;display:block;max-height:150px;object-fit:contain}
+.pov{position:absolute;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;opacity:0;transition:.2s;cursor:pointer}.pov:hover{opacity:1}
+.pg{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.pr{display:flex;flex-direction:column;gap:3px}.pr label{font-size:10px;color:var(--tx3);font-family:var(--mn)}.pr.full{grid-column:1/-1}
+input[type=text],input[type=number],select{background:var(--sf2);border:1px solid var(--bd2);border-radius:3px;color:var(--tx);font-family:var(--mn);font-size:12px;padding:5px 7px;width:100%;outline:none;transition:border-color .15s}
+input:focus,select:focus{border-color:var(--ac)}select option{background:var(--sf2)}
+.btn{display:flex;align-items:center;justify-content:center;gap:5px;padding:8px 12px;border:none;border-radius:3px;cursor:pointer;font-family:var(--mn);font-size:12px;font-weight:500;transition:all .15s}
+.bpri{background:var(--ac);color:#0f0f0f;width:100%;margin-top:7px}.bpri:hover{background:var(--ac2)}.bpri:disabled{background:var(--bd2);color:var(--tx3);cursor:not-allowed}
+.bsm{padding:4px 10px;font-size:10px;border-radius:2px}
+.bgh{background:transparent;color:var(--tx2);border:1px solid var(--bd2)}.bgh:hover{border-color:var(--tx2);color:var(--tx)}
+.bgr{background:#1e3a05;color:var(--ac);border:1px solid #3a6010}.bgr:hover{background:#2a5008}
+.bdr{background:transparent;color:var(--er);border:1px solid transparent}.bdr:hover{border-color:var(--er)}
+.sb{padding:8px 13px;font-family:var(--mn);font-size:10px;color:var(--tx3);background:var(--sf);border-top:1px solid var(--bd);display:flex;align-items:center;gap:6px;flex-shrink:0}
+.sd{width:5px;height:5px;border-radius:50%;background:var(--tx3);flex-shrink:0}
+.sd.act{background:var(--ac);animation:pu 1s ease-in-out infinite}.sd.err{background:var(--er)}.sd.ok{background:var(--ac)}
+@keyframes pu{0%,100%{opacity:1}50%{opacity:.4}}
+.cbr{display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px}
+.cbr input[type=checkbox]{accent-color:var(--ac);width:12px;height:12px}
+.cbr span{font-size:11px;color:var(--tx2)}
+/* ENGINE CONFIG PANELS */
+.eng-panel{display:none}.eng-panel.show{display:block}
+.cfg-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.cfg-row label{font-size:10px;color:var(--tx3);font-family:var(--mn);white-space:nowrap;width:80px}
+.cfg-row input{flex:1}
+.ping-dot{width:7px;height:7px;border-radius:50%;background:var(--tx3);display:inline-block;flex-shrink:0}
+.ping-dot.ok{background:var(--ac)}.ping-dot.err{background:var(--er)}.ping-dot.chk{background:var(--wn);animation:pu 0.5s infinite}
+/* RIGHT */
+.pr2{display:flex;flex-direction:column;overflow:hidden}
+.tb{display:flex;align-items:center;gap:5px;padding:8px 13px;border-bottom:1px solid var(--bd);background:var(--sf);flex-shrink:0;flex-wrap:wrap}
+.ts{width:1px;height:16px;background:var(--bd2);margin:0 2px}
+.rc{display:flex;flex:1;overflow:hidden}
+.ga{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:22px}
+.sb2{display:flex;flex-direction:column;gap:7px}
+.sh{display:flex;align-items:center;gap:7px}
+.st{font-family:var(--mn);font-size:11px;color:var(--tx2)}
+.sl{font-size:9px;padding:2px 6px;border-radius:2px;font-family:var(--mn)}
+.lf{background:#1e2e05;color:var(--ac);border:1px solid #3a5510}.lb{background:#0e1e2e;color:var(--in);border:1px solid #1a3a5e}
+.ig{display:inline-grid;gap:2px;background:var(--sf2);padding:2px;border-radius:4px;border:1px solid var(--bd)}
+.ic{width:66px;height:48px;background:var(--sf);border:1px solid var(--bd2);border-radius:2px;display:flex;align-items:center;justify-content:center;position:relative;cursor:pointer;transition:all .1s;user-select:none}
+.ic:hover{border-color:var(--ac);background:#1e2a0a}
+.ic.sel{border-color:var(--ac);background:#1e2a0a;box-shadow:0 0 0 1px var(--ac)}
+.ic.rot::after{content:'↻';position:absolute;top:2px;right:3px;font-size:8px;color:var(--wn)}
+.ic.unc{border-color:var(--wn)!important;border-style:dashed!important}
+.cn{font-family:var(--mn);font-size:16px;font-weight:500;color:var(--tx)}
+.cn.emp{color:var(--tx3);font-size:18px}
+.ic input.ce{position:absolute;inset:0;border:none;background:transparent;font-family:var(--mn);font-size:16px;font-weight:500;text-align:center;color:var(--ac);padding:0;width:100%;height:100%;outline:none}
+.ep{border-left:1px solid var(--bd);width:185px;flex-shrink:0;background:var(--sf);display:flex;flex-direction:column;overflow-y:auto;padding:11px;gap:8px}
+.ep.hid{display:none}
+.et{font-family:var(--mn);font-size:10px;color:var(--tx3);letter-spacing:1px;text-transform:uppercase}
+.ef{display:flex;flex-direction:column;gap:3px}.ef label{font-size:10px;color:var(--tx3);font-family:var(--mn)}
+.ib{padding:9px 13px;background:var(--sf);border-bottom:1px solid var(--bd);display:flex;gap:7px;flex-wrap:wrap;align-items:center;flex-shrink:0}
+.ic2{background:var(--sf2);border:1px solid var(--bd2);border-radius:3px;padding:3px 9px}
+.icl{font-size:8px;font-family:var(--mn);color:var(--tx3);letter-spacing:1px;text-transform:uppercase}
+.icv{font-size:12px;font-family:var(--mn);color:var(--tx)}
+.tag{font-size:9px;font-family:var(--mn);padding:2px 6px;border-radius:2px}
+.tw{background:#2e1e05;color:var(--wn);border:1px solid #5e3a10}
+.es{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:12px;color:var(--tx3);padding:40px;text-align:center}
+.jp{background:var(--sf);border:1px solid var(--bd);border-radius:4px;overflow:hidden;margin:0 18px 18px}
+.jph{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--bd)}
+.jph span{font-family:var(--mn);font-size:10px;color:var(--tx3);letter-spacing:1px}
+pre.jc{font-family:var(--mn);font-size:10px;color:#9bc429;padding:10px;overflow-x:auto;line-height:1.6;max-height:200px;overflow-y:auto;white-space:pre}
+/* PROGRESS BAR */
+.prog-wrap{height:3px;background:var(--bd);border-radius:2px;overflow:hidden;margin-top:6px}
+.prog-fill{height:100%;background:var(--ac);border-radius:2px;width:0;transition:width .3s}
+::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:3px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Impo<span>Reader</span></div>
+  <div class="badge">v0.4</div>
+  <div class="badge hi">TPL+JOB</div>
+  <!-- ENGINE SWITCHER -->
+  <div class="eng-sw">
+    <button class="eng-btn" id="btn-claude" onclick="setEngine('claude')">Claude API</button>
+    <button class="eng-btn active" id="btn-ollama" onclick="setEngine('ollama')">Ollama</button>
+  </div>
+</header>
+<main>
+  <div class="pl">
+    <!-- UPLOAD -->
+    <div class="ps">
+      <div class="lbl">фото спуска</div>
+      <div class="upz" id="upz">
+        <input type="file" id="fi" accept="image/*">
+        <span style="font-size:20px;display:block;margin-bottom:4px;color:var(--tx3)">⊞</span>
+        <div style="color:var(--tx2);font-size:12px;line-height:1.5"><strong style="color:var(--ac)">Выбрать фото</strong> или перетащить</div>
+      </div>
+      <div id="pw"><img id="pi" alt=""><div class="pov" onclick="clearPhoto()"><span style="color:white;font-size:11px">✕</span></div></div>
+    </div>
+
+    <!-- ENGINE CONFIG -->
+    <div class="ps">
+      <div class="lbl">настройки AI</div>
+
+      <!-- Claude panel -->
+      <div class="eng-panel" id="panel-claude">
+        <div style="font-size:11px;color:var(--tx2);margin-bottom:8px">Использует Claude API через claude.ai</div>
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mn)">API ключ не нужен — вшит в приложение.</div>
+      </div>
+
+      <!-- Ollama panel -->
+      <div class="eng-panel show" id="panel-ollama">
+        <div class="cfg-row">
+          <label>Прокси URL</label>
+          <input type="text" id="ol-proxy" value="http://localhost:5757/ollama">
+          <div class="ping-dot" id="ping-dot" title="Статус прокси"></div>
+        </div>
+        <div class="cfg-row">
+          <label>Модель</label>
+          <input type="text" id="ol-model" value="llava:7b">
+        </div>
+        <button class="btn bgh bsm" onclick="pingOllama()" style="width:100%;margin-bottom:6px">⟳ Проверить соединение</button>
+        <div id="ping-status" style="font-size:10px;color:var(--tx3);font-family:var(--mn)">Запустите impo_proxy.py</div>
+        <div class="prog-wrap"><div class="prog-fill" id="ping-prog"></div></div>
+      </div>
+    </div>
+
+    <!-- GRID -->
+    <div class="ps">
+      <div class="lbl">сетка полос</div>
+      <div class="pg">
+        <div class="pr"><label>Рядов</label><input type="number" id="p-rows" value="4" min="1" max="8"></div>
+        <div class="pr"><label>Колонок</label><input type="number" id="p-cols" value="4" min="1" max="8"></div>
+      </div>
+    </div>
+
+    <!-- DIMENSIONS -->
+    <div class="ps">
+      <div class="lbl">размеры (мм)</div>
+      <div class="pg">
+        <div class="pr"><label>Лист W</label><input type="number" id="p-sw" value="720"></div>
+        <div class="pr"><label>Лист H</label><input type="number" id="p-sh" value="1040"></div>
+        <div class="pr"><label>Полоса W</label><input type="number" id="p-pw" value="163" step="0.1"></div>
+        <div class="pr"><label>Полоса H</label><input type="number" id="p-ph" value="245" step="0.1"></div>
+        <div class="pr"><label>Корешок</label><input type="number" id="p-spine" value="24"></div>
+        <div class="pr"><label>Зазор ряда</label><input type="number" id="p-gap" value="6"></div>
+        <div class="pr"><label>Отступ X</label><input type="number" id="p-mx" value="22" step="0.5"></div>
+        <div class="pr"><label>Отступ Y</label><input type="number" id="p-my" value="12" step="0.5"></div>
+      </div>
+    </div>
+
+    <!-- PREPS PARAMS -->
+    <div class="ps">
+      <div class="lbl">Preps параметры</div>
+      <div class="pg">
+        <div class="pr full"><label>Имя шаблона</label><input type="text" id="p-tpl" value="NewTemplate_72x104"></div>
+        <div class="pr full"><label>Имя тетради</label><input type="text" id="p-sig" value="72x104"></div>
+        <div class="pr full"><label>Путь к PDF</label><input type="text" id="p-path" value="file://DELL_EVO/dataVolumes/"></div>
+        <div class="pr full"><label>Папка заказа</label><input type="text" id="p-folder" placeholder="0641_Batman/"></div>
+        <div class="pr full"><label>Имя PDF блока</label><input type="text" id="p-pdf" placeholder="block_001-236"></div>
+      </div>
+    </div>
+
+    <div class="ps">
+      <div class="lbl">опции</div>
+      <label class="cbr"><input type="checkbox" id="c-two" checked><span>Два спуска (лицо + оборот)</span></label>
+      <label class="cbr"><input type="checkbox" id="c-marks" checked><span>Копировать метки из шаблона</span></label>
+      <button class="btn bpri" id="abtn" disabled onclick="analyzePhoto()"><span id="btxt">▶ РАСПОЗНАТЬ</span></button>
+    </div>
+
+    <div class="sb"><div class="sd" id="sd"></div><span id="stxt">Загрузите фото</span></div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="pr2">
+    <div class="tb">
+      <span style="font-family:var(--mn);font-size:9px;color:var(--tx3);letter-spacing:1px">РЕДАКТОР</span>
+      <div class="ts"></div>
+      <button class="btn bgh bsm" onclick="addSheet()">+ лист</button>
+      <button class="btn bgr bsm" onclick="dlBoth()" id="b-both" disabled>⬇ TPL + JOB</button>
+      <button class="btn bgh bsm" onclick="dlTpl()" id="b-tpl" disabled>↓ .tpl</button>
+      <button class="btn bgh bsm" onclick="dlJob()" id="b-job" disabled>↓ .job</button>
+      <button class="btn bgh bsm" onclick="previewTpl()" id="b-prev" disabled>👁 Превью</button>
+    </div>
+    <div class="rc">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div id="ib" class="ib" style="display:none"></div>
+        <div id="es" class="es">
+          <div style="font-size:36px;opacity:.15">⊟</div>
+          <div style="font-size:13px;line-height:1.9;max-width:420px">
+            1. Запустите <strong style="color:var(--ac)">impo_proxy.py</strong><br>
+            2. Загрузите фото спуска<br>
+            3. Нажмите <strong style="color:var(--ac)">▶ Распознать</strong><br>
+            4. Проверьте → <strong style="color:var(--ac)">⬇ TPL + JOB</strong>
+          </div>
+        </div>
+        <div id="sa" class="ga" style="display:none"></div>
+        <div id="jpw" style="display:none"></div>
+      </div>
+      <div class="ep hid" id="ep"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ─── TEMPLATE DATA ────────────────────────────────────────────────
+const TPL_SMARTMARKS = "%SSiSmartMarkStart:  3 2\nname: |cmyk_id|\ntext: |cmyk_id.eps|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: 0.00000\nsmartoffsety: 0.00000\nrefentity: 2\nrefanchor: 1\nmarkanchor: 1\nsection: 0\nwidth: 14.17290\nheight: 14.17290\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 1\nname: |Klapan_Text_face_date_time|\ntext: |$SheetWidth X $SheetHeight      $date $time|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 0.00000\nsmartoffsety: 425.19685\nrefentity: 4\nrefanchor: 8\nmarkanchor: 3\nsection: 0\nwidth: 258.00000\nheight: 12.00000\norigingroup: |Rapida|\nflatid: true\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Krest_LB|\ntext: |Krest.eps|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: 42.51969\nsmartoffsety: -14.17323\nrefentity: 4\nrefanchor: 7\nmarkanchor: 5\nsection: 0\nwidth: 11.33790\nheight: 11.33890\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Krest_LT|\ntext: |Krest.eps|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: 42.51969\nsmartoffsety: 14.17323\nrefentity: 4\nrefanchor: 1\nmarkanchor: 3\nsection: 0\nwidth: 11.33790\nheight: 11.33890\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Krest_RB|\ntext: |Krest.eps|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: -42.51969\nsmartoffsety: -14.17323\nrefentity: 4\nrefanchor: 5\nmarkanchor: 7\nsection: 0\nwidth: 11.33790\nheight: 11.33890\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Krest_RT|\ntext: |Krest.eps|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: -42.51969\nsmartoffsety: 14.17323\nrefentity: 4\nrefanchor: 3\nmarkanchor: 1\nsection: 0\nwidth: 11.33790\nheight: 11.33890\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Right_ugol|\ntext: |right_ugol|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 425.19685\nsmartoffsety: 0.00000\nrefentity: 2\nrefanchor: 7\nmarkanchor: 5\nsection: 0\nwidth: 11.33890\nheight: 85.03960\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |Right_ugol_back|\ntext: |right_ugol|\ndupflags: 34\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 90\nsmartoffsetx: 425.19685\nsmartoffsety: 0.00000\nrefentity: 2\nrefanchor: 7\nmarkanchor: 5\nsection: 0\nwidth: 11.33890\nheight: 85.03960\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 4\nname: |Koreshok_sec1|\ntext: |SIGNATURE COLLATION MARK A|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 2\ncolor1: 0\ncolor2: 0\ncolor3: 0\ncolor4: 100\nrotation: 0\nsmartoffsetx: 0.00000\nsmartoffsety: 340.15748\nrefentity: 2\nrefanchor: 7\nmarkanchor: 7\nsection: 1\nwidth: 4.25197\nheight: 0.00000\norigingroup: |Rapida|\nstepsize: 14.17323\ncollsize: 80.00000\ncollstart: 56.69291\nusealternateedge: false\nadjustopttextpos: false\ngapfrompage: 18.00000\nopttext: ||\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 4\nname: |Koreshok_sec1|\ntext: |SIGNATURE COLLATION MARK A|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 2\ncolor1: 0\ncolor2: 0\ncolor3: 0\ncolor4: 100\nrotation: 0\nsmartoffsetx: 0.00000\nsmartoffsety: 340.15748\nrefentity: 2\nrefanchor: 7\nmarkanchor: 7\nsection: 2\nwidth: 4.25197\nheight: 0.00000\norigingroup: |Rapida|\nstepsize: 14.17323\ncollsize: 80.00000\ncollstart: 56.69291\nusealternateedge: false\nadjustopttextpos: false\ngapfrompage: 18.00000\nopttext: ||\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 1\nname: |Klapan_Text_face_Back1|\ntext: |$Jobname LIST$pressrunnumber CTOPOHA $Side|\ndupflags: 34\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 90\nsmartoffsetx: -19.84252\nsmartoffsety: -566.92913\nrefentity: 4\nrefanchor: 1\nmarkanchor: 7\nsection: 0\nwidth: 378.00000\nheight: 18.00000\norigingroup: |Rapida|\nflatid: true\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 1\nname: |Klapan_Text_face1|\ntext: |$Jobname LIST$pressrunnumber CTOPOHA $Side|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 0.00000\nsmartoffsety: -56.69291\nrefentity: 4\nrefanchor: 1\nmarkanchor: 3\nsection: 0\nwidth: 378.00000\nheight: 18.00000\norigingroup: |Rapida|\nflatid: true\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |159-030-030-F_CMYK_gesamt1|\ntext: |159-030-030-F_CMYK_gesamt.eps|\ndupflags: 51\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 45.35433\nsmartoffsety: 2.83465\nrefentity: 5\nrefanchor: 9\nmarkanchor: 9\nsection: 0\nwidth: 15.58980\nheight: 12.18950\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |159-030-030-F_CMYK_gesamt2|\ntext: |159-030-030-F_CMYK_gesamt.eps|\ndupflags: 51\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 45.35433\nsmartoffsety: -2.83465\nrefentity: 6\nrefanchor: 9\nmarkanchor: 9\nsection: 0\nwidth: 15.58980\nheight: 12.18950\norigingroup: |Rapida|\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |New_Shkala_64x90_A|\ntext: |new_Shkala_XXx104.eps|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 90\nsmartoffsetx: -22.67717\nsmartoffsety: 0.00000\nrefentity: 1\nrefanchor: 4\nmarkanchor: 4\nsection: 0\nwidth: 2891.33940\nheight: 17.00830\norigingroup: ||\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |New_Shkala_64x90_B|\ntext: |new_Shkala_XXx104.eps|\ndupflags: 34\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 22.67717\nsmartoffsety: 0.00000\nrefentity: 1\nrefanchor: 8\nmarkanchor: 8\nsection: 0\nwidth: 2891.33940\nheight: 17.00830\norigingroup: ||\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 1\nname: |Text_vert_A|\ntext: |$Jobname Tetradka $Sig|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: -283.46457\nsmartoffsety: 14.17323\nrefentity: 4\nrefanchor: 4\nmarkanchor: 1\nsection: 2\nwidth: 77.00000\nheight: 7.00000\norigingroup: |Text_vert|\nflatid: true\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 1\nname: |Text_vert_A|\ntext: |$Jobname Tetradka $Sig|\ndupflags: 33\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 0\nsmartoffsetx: -283.46457\nsmartoffsety: 0.00000\nrefentity: 4\nrefanchor: 5\nmarkanchor: 1\nsection: 1\nwidth: 77.00000\nheight: 7.00000\norigingroup: |Text_vert|\nflatid: true\nverticaltext: false\ntextscriptsystem: 1\n%SSiSmartMarkEnd:\n%SSiSmartMarkStart:  3 2\nname: |CMYK_rus_rot|\ntext: |CMYK rus rot|\ndupflags: 35\nsigstart: 1\nsigmod: 1\ncolortype: 0\ncolor1: 100\ncolor2: 100\ncolor3: 100\ncolor4: 100\nrotation: 270\nsmartoffsetx: 340.15748\nsmartoffsety: 8.50394\nrefentity: 2\nrefanchor: 7\nmarkanchor: 5\nsection: 0\nwidth: 10.09570\nheight: 157.26360\norigingroup: |Rapida|\n%SSiSmartMarkEnd:";
+const TPL_MATRIX = "%SSiPrshMatrix: 1 16.00000 0.00000 1\n%SSiPrshMatrix: 8 462.04724 0.00000 1\n%SSiPrshMatrix: 9 694.48819 0.00000 1\n%SSiPrshMatrix: 11 5.66929 0.00000 1\n%SSiPrshMatrix: 10 1.00000 0.00000 1\n%SSiPrshMatrix: 12 7.00000 0.00000 1\n%SSiPrshMatrix: 14 0.00000 0.00000 1\n%SSiPrshMatrix: 4 62.36221 0.00000 1\n%SSiPrshMatrix: 5 467.71654 0.00000 1\n%SSiPrshMatrix: 4 0.00000 0.00000 1\n%SSiPrshMatrix: 5 467.71654 0.00000 1\n%SSiPrshMatrix: 4 34.01575 34.01575 1\n%SSiPrshMatrix: 5 467.71654 0.00000 1\n%SSiPrshMatrix: 4 0.00000 0.00000 1\n%SSiPrshMatrix: 5 467.71654 0.00000 1\n%SSiPrshMatrix: 4 0.00000 62.36221 1\n%SSiPrshMatrix: 13 0.00000 0.00000 1\n%SSiPrshMatrix: 4 34.01574 0.00000 0\n%SSiPrshMatrix: 5 666.14173 0.00000 0\n%SSiPrshMatrix: 4 8.50394 8.50394 0\n%SSiPrshMatrix: 5 666.14173 0.00000 0\n%SSiPrshMatrix: 4 34.01575 34.01575 0\n%SSiPrshMatrix: 5 666.14173 0.00000 0\n%SSiPrshMatrix: 4 8.50394 8.50394 0\n%SSiPrshMatrix: 5 666.14173 0.00000 0\n%SSiPrshMatrix: 4 0.00000 34.01574 0";
+const MM2PT = 2.834645669;
+
+// ─── ENGINE ──────────────────────────────────────────────────────
+let currentEngine = 'ollama';
+
+function setEngine(eng) {
+  currentEngine = eng;
+  document.getElementById('btn-claude').classList.toggle('active', eng === 'claude');
+  document.getElementById('btn-ollama').classList.toggle('active', eng === 'ollama');
+  document.getElementById('panel-claude').classList.toggle('show', eng === 'claude');
+  document.getElementById('panel-ollama').classList.toggle('show', eng === 'ollama');
+}
+
+// ─── PING OLLAMA ─────────────────────────────────────────────────
+async function pingOllama() {
+  const dot = document.getElementById('ping-dot');
+  const status = document.getElementById('ping-status');
+  const prog = document.getElementById('ping-prog');
+  dot.className = 'ping-dot chk';
+  status.textContent = 'Проверяю...';
+  prog.style.width = '30%';
+  try {
+    const proxyUrl = document.getElementById('ol-proxy').value;
+    const model = document.getElementById('ol-model').value;
+    const resp = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: 'Hi', stream: true })
+    });
+    if (resp.ok) {
+      dot.className = 'ping-dot ok';
+      status.textContent = `✓ Прокси работает · модель ${model}`;
+      prog.style.width = '100%';
+      setTimeout(() => prog.style.width = '0', 1500);
+    } else {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+  } catch(e) {
+    dot.className = 'ping-dot err';
+    status.textContent = `✗ Ошибка: ${e.message}`;
+    prog.style.width = '0';
+  }
+}
+
+// ─── UPLOAD ──────────────────────────────────────────────────────
+const S = { img64: null, mime: 'image/jpeg', sheets: [], meta: {}, sel: null };
+
+document.getElementById('fi').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
+const uz = document.getElementById('upz');
+uz.addEventListener('dragover', e => { e.preventDefault(); uz.classList.add('drag'); });
+uz.addEventListener('dragleave', () => uz.classList.remove('drag'));
+uz.addEventListener('drop', e => { e.preventDefault(); uz.classList.remove('drag'); const f = e.dataTransfer.files[0]; if(f && f.type.startsWith('image/')) loadFile(f); });
+
+function loadFile(f) {
+  S.mime = f.type || 'image/jpeg';
+  const r = new FileReader();
+  r.onload = e => {
+    S.img64 = e.target.result.split(',')[1];
+    document.getElementById('pi').src = e.target.result;
+    uz.style.display = 'none';
+    document.getElementById('pw').style.display = 'block';
+    document.getElementById('abtn').disabled = false;
+    setStatus('ok', 'Фото загружено');
+  };
+  r.readAsDataURL(f);
+}
+function clearPhoto() { S.img64 = null; document.getElementById('fi').value = ''; uz.style.display = ''; document.getElementById('pw').style.display = 'none'; document.getElementById('abtn').disabled = true; setStatus('', 'Загрузите фото'); }
+function setStatus(t, txt) { document.getElementById('sd').className = 'sd' + (t ? ' ' + t : ''); document.getElementById('stxt').textContent = txt; }
+
+// ─── ANALYZE ─────────────────────────────────────────────────────
+async function analyzePhoto() {
+  if (!S.img64) return;
+  const rows = +document.getElementById('p-rows').value || 4;
+  const cols = +document.getElementById('p-cols').value || 4;
+  const two = document.getElementById('c-two').checked;
+
+  document.getElementById('abtn').disabled = true;
+  document.getElementById('btxt').textContent = '⟳ АНАЛИЗ...';
+  setStatus('act', `Отправляю в ${currentEngine === 'ollama' ? 'Ollama' : 'Claude'}...`);
+
+  try {
+    let result;
+    if (currentEngine === 'ollama') {
+      result = await analyzeOllama(rows, cols, two);
+    } else {
+      result = await analyzeClaude(rows, cols, two);
+    }
+    applyResult(result);
+    setStatus('ok', `Готово (${currentEngine}) — уверенность ${Math.round((result.overall_confidence||0)*100)}%`);
+  } catch(err) {
+    console.error(err);
+    setStatus('err', `Ошибка: ${err.message}`);
+    // fallback demo
+    demoResult(rows, cols, two);
+    setStatus('ok', 'Демо-данные. Заполните и скачайте.');
+  } finally {
+    document.getElementById('abtn').disabled = false;
+    document.getElementById('btxt').textContent = '↺ СНОВА';
+  }
+}
+
+// ─── OLLAMA ──────────────────────────────────────────────────────
+async function analyzeOllama(rows, cols, two) {
+  const proxyUrl = document.getElementById('ol-proxy').value;
+  const model = document.getElementById('ol-model').value;
+
+  const prompt = `You are a prepress specialist. This is a handwritten imposition layout for an offset printing press.
+
+Grid: ${rows} rows × ${cols} columns (${rows*cols} positions per sheet).
+${two ? 'There are TWO impositions on the page: face (лицо) and back (оборот).' : ''}
+Rows counted top to bottom (row 0 = top). Columns left to right (col 0 = left).
+Page numbers are handwritten integers, typically 1-300.
+
+Also read from the sheet if visible: order number, title, total pages, binding type, paper type.
+
+RESPOND WITH VALID JSON ONLY. No markdown, no explanation:
+{"order_number":null,"order_name":null,"total_pages":null,"binding":null,"paper":null,"overall_confidence":0.5,"issues":[],"sheets":[{"side":"face","label":"Лицо","rows":${rows},"cols":${cols},"cells":[{"row":0,"col":0,"page":null,"rotated":false,"confident":true}]}${two ? ',{"side":"back","label":"Оборот","rows":' + rows + ',"cols":' + cols + ',"cells":[...]}' : ''}]}
+Fill ALL ${rows * cols} cells per sheet. Set confident=false if digit is unclear. rotated=true if page is upside down.`;
+
+  setStatus('act', 'Ollama обрабатывает изображение...');
+
+  const resp = await fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      prompt,
+      images: [S.img64],
+      stream: true,
+      options: { temperature: 0.1, num_predict: 1200 }
+    })
+  });
+
+  if (!resp.ok) throw new Error(`Прокси вернул ${resp.status}`);
+  const data = await resp.json();
+  const raw = (data.response || '').trim().replace(/```json|```/g, '').trim();
+
+  // Найдём JSON в ответе (LLaVA иногда добавляет текст вокруг)
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('JSON не найден в ответе Ollama');
+  return JSON.parse(jsonMatch[0]);
+}
+
+// ─── CLAUDE API ──────────────────────────────────────────────────
+async function analyzeClaude(rows, cols, two) {
+  const prompt = `Ты специалист по допечатной подготовке. Фото — рукописная схема спуска полос.
+Сетка: ${rows} рядов × ${cols} колонок. ${two ? 'Ищи ДВА спуска (лицо и оборот).' : ''}
+Ряды: сверху вниз (row 0=верх). Колонки: слева направо (col 0=левый).
+Верни ТОЛЬКО JSON (без markdown):
+{"order_number":null,"order_name":null,"total_pages":null,"binding":null,"paper":null,"overall_confidence":0.5,"issues":[],"sheets":[{"side":"face","label":"Лицо","rows":${rows},"cols":${cols},"cells":[{"row":0,"col":0,"page":null,"rotated":false,"confident":true}]}${two ? ',{"side":"back","label":"Оборот","rows":' + rows + ',"cols":' + cols + ',"cells":[...]}' : ''}]}
+Заполни все ${rows * cols} ячеек.`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: S.mime, data: S.img64 } },
+        { type: 'text', text: prompt }
+      ]}]
+    })
+  });
+  const d = await resp.json();
+  const raw = d.content.map(b => b.text || '').join('').trim().replace(/```json|```/g, '').trim();
+  return JSON.parse(raw);
+}
+
+// ─── DEMO ────────────────────────────────────────────────────────
+function demoResult(rows, cols, two) {
+  const mk = (side, label, grid) => {
+    const cells = [];
+    for(let r = 0; r < rows; r++) for(let c = 0; c < cols; c++) {
+      const p = (grid[r] || [])[c];
+      cells.push({ row: r, col: c, page: p ?? null, rotated: r < rows/2, confident: p != null });
+    }
+    return { side, label, rows, cols, cells };
+  };
+  applyResult({
+    order_number: '0641', order_name: 'BetmenChyornoe', total_pages: 32,
+    binding: 'КБС', paper: 'офсет', overall_confidence: .6, issues: ['Демо-режим'],
+    sheets: [
+      mk('face', 'Лицо', [[4,29,32,1],[5,28,25,8],[12,21,24,9],[13,20,17,16]]),
+      ...(two ? [mk('back', 'Оборот', [[2,31,30,3],[6,27,26,7],[11,22,23,10],[14,19,18,15]])] : [])
+    ]
+  });
+}
+
+// ─── RENDER ──────────────────────────────────────────────────────
+function applyResult(r) {
+  S.meta = r; S.sheets = r.sheets || [];
+  renderIB(r); renderSheets();
+  document.getElementById('es').style.display = 'none';
+  document.getElementById('sa').style.display = 'flex';
+  ['b-both','b-tpl','b-job','b-prev'].forEach(id => document.getElementById(id).disabled = false);
+}
+
+function renderIB(r) {
+  const ib = document.getElementById('ib'); ib.style.display = 'flex';
+  const c = r.overall_confidence || 0;
+  const cc = c >= .8 ? 'var(--ac)' : c >= .5 ? 'var(--wn)' : 'var(--er)';
+  ib.innerHTML = [
+    r.order_number ? `<div class="ic2"><div class="icl">Заказ</div><div class="icv">${r.order_number}</div></div>` : '',
+    r.order_name ? `<div class="ic2"><div class="icl">Название</div><div class="icv" style="font-size:10px">${r.order_name}</div></div>` : '',
+    r.total_pages ? `<div class="ic2"><div class="icl">Полос</div><div class="icv">${r.total_pages}</div></div>` : '',
+    `<div class="ic2"><div class="icl">AI (${currentEngine})</div><div class="icv" style="color:${cc}">${Math.round(c*100)}%</div></div>`,
+    ...(r.issues || []).map(i => `<span class="tag tw">${i}</span>`),
+  ].join('');
+}
+
+function renderSheets() { const a = document.getElementById('sa'); a.innerHTML = ''; S.sheets.forEach((sh, si) => a.appendChild(buildSheet(sh, si))); }
+
+function buildSheet(sh, si) {
+  const b = document.createElement('div'); b.className = 'sb2';
+  const sc = sh.side === 'back' ? 'lb' : 'lf';
+  b.innerHTML = `<div class="sh"><span class="st">ЛИСТ ${si+1}</span><span class="sl ${sc}">${sh.label||sh.side}</span><span style="font-size:10px;color:var(--tx3);font-family:var(--mn)">${sh.rows}×${sh.cols}</span><button class="btn bdr bsm" onclick="removeSheet(${si})" style="margin-left:auto">✕</button></div>`;
+  const g = document.createElement('div'); g.className = 'ig'; g.style.gridTemplateColumns = `repeat(${sh.cols},66px)`;
+  for(let r = 0; r < sh.rows; r++) for(let c = 0; c < sh.cols; c++) {
+    const cd = sh.cells.find(x => x.row === r && x.col === c);
+    const el = document.createElement('div'); el.className = 'ic';
+    if(cd?.rotated) el.classList.add('rot');
+    if(cd && !cd.confident) el.classList.add('unc');
+    el.dataset.s = si; el.dataset.r = r; el.dataset.c = c;
+    const n = document.createElement('div'); n.className = cd?.page != null ? 'cn' : 'cn emp'; n.textContent = cd?.page != null ? cd.page : '?';
+    el.appendChild(n);
+    el.addEventListener('click', () => selCell(si, r, c));
+    el.addEventListener('dblclick', () => inlineEd(si, r, c, el));
+    g.appendChild(el);
+  }
+  b.appendChild(g); return b;
+}
+
+function getCD(si, r, c) { const sh = S.sheets[si]; let cd = sh.cells.find(x => x.row===r && x.col===c); if(!cd) { cd={row:r,col:c,page:null,rotated:false,confident:true}; sh.cells.push(cd); } return cd; }
+
+function selCell(si, r, c) {
+  document.querySelectorAll('.ic.sel').forEach(el => el.classList.remove('sel'));
+  S.sel = {si, r, c};
+  const el = document.querySelector(`.ic[data-s="${si}"][data-r="${r}"][data-c="${c}"]`);
+  if(el) el.classList.add('sel');
+  const cd = getCD(si, r, c);
+  const ep = document.getElementById('ep'); ep.classList.remove('hid');
+  ep.innerHTML = `<div class="et">ПОЗИЦИЯ [${r+1},${c+1}]</div>
+<div class="ef"><label>Номер полосы</label><input type="number" id="ep-p" value="${cd.page??''}" placeholder="?" oninput="commitEd()"></div>
+<div class="ef" style="margin-top:4px">
+<label class="cbr"><input type="checkbox" id="ep-r" ${cd.rotated?'checked':''} onchange="commitEd()"><span>Повёрнута 180°</span></label>
+<label class="cbr"><input type="checkbox" id="ep-cf" ${cd.confident?'checked':''} onchange="commitEd()"><span>Уверен в номере</span></label>
+</div>
+<button class="btn bdr bsm" onclick="clrCell()" style="width:100%;margin-top:4px">✕ Очистить</button>
+<button class="btn bgh bsm" onclick="document.getElementById('ep').classList.add('hid')" style="width:100%;margin-top:4px">Закрыть</button>`;
+}
+
+function commitEd() { const{si,r,c}=S.sel; const cd=getCD(si,r,c); const v=document.getElementById('ep-p').value; cd.page=v!==''?parseInt(v):null; cd.rotated=document.getElementById('ep-r').checked; cd.confident=document.getElementById('ep-cf').checked; refSheet(si); selCell(si,r,c); }
+function clrCell() { document.getElementById('ep-p').value=''; document.getElementById('ep-r').checked=false; document.getElementById('ep-cf').checked=true; commitEd(); }
+function refSheet(si) { const a=document.getElementById('sa'); if(a.children[si]) a.replaceChild(buildSheet(S.sheets[si],si), a.children[si]); }
+function inlineEd(si, r, c, el) {
+  const cd=getCD(si,r,c); const inp=document.createElement('input'); inp.className='ce'; inp.type='text'; inp.value=cd.page??''; inp.placeholder='?';
+  el.innerHTML=''; el.appendChild(inp); inp.focus(); inp.select();
+  const cm=()=>{const v=inp.value.trim(); cd.page=v!==''?parseInt(v):null; cd.confident=true; refSheet(si);};
+  inp.addEventListener('blur',cm); inp.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();cm();}});
+}
+function addSheet() {
+  const rows=+document.getElementById('p-rows').value||4,cols=+document.getElementById('p-cols').value||4;
+  const cells=[]; for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) cells.push({row:r,col:c,page:null,rotated:false,confident:true});
+  S.sheets.push({side:'extra',label:'Лист '+(S.sheets.length+1),rows,cols,cells}); renderSheets();
+  ['b-both','b-tpl','b-job','b-prev'].forEach(id=>document.getElementById(id).disabled=false);
+}
+function removeSheet(si) { if(!confirm('Удалить лист?'))return; S.sheets.splice(si,1); renderSheets(); }
+
+// ─── TPL GENERATION ──────────────────────────────────────────────
+function genTpl() {
+  const tplName=document.getElementById('p-tpl').value.trim()||'NewTemplate';
+  const sigName=document.getElementById('p-sig').value.trim()||'72x104';
+  const useMarks=document.getElementById('c-marks').checked;
+  const sw=+document.getElementById('p-sw').value*MM2PT;
+  const sh=+document.getElementById('p-sh').value*MM2PT;
+  const pw=+document.getElementById('p-pw').value*MM2PT;
+  const ph=+document.getElementById('p-ph').value*MM2PT;
+  const spine=+document.getElementById('p-spine').value*MM2PT;
+  const gap=+document.getElementById('p-gap').value*MM2PT;
+  const mx=+document.getElementById('p-mx').value*MM2PT;
+  const my=+document.getElementById('p-my').value*MM2PT;
+  const fmt=n=>n.toFixed(5);
+
+  function calcX(col,cols){return mx+col*pw+(col>=Math.floor(cols/2)?spine:0);}
+  function calcY(row,rows){
+    const hr=Math.floor(rows/2); let y=my;
+    for(let r=0;r<row;r++){y+=ph;y+=(r+1===hr)?spine:gap;}
+    return y;
+  }
+
+  const L=[];
+  L.push('%!PS');
+  L.push(`% Template: ${tplName}.tpl  Generated by ImpoReader v0.4`);
+  L.push(`% Engine: ${currentEngine}  Date: ${new Date().toLocaleString()}`);
+  L.push('%%FileEncoding: 134217984');
+  L.push('%%Creator: Preps 5.3.3   Windows Win32');
+  L.push('%SSiPrepsVer: 1');
+  L.push(`%SSiLayout: |${tplName}| |${tplName}| 1 1 ${fmt(pw)} ${fmt(ph)} 25 ''`);
+  L.push(`%SSiPressSheet: ${fmt(sw)} ${fmt(sh)} 0.00000 0.00000 0 283.46457 1 14.17330 0`);
+  L.push(`%SSiPrshPage: 0.00000 0.00000 0.00000 0.00000 3 1 2 14.17330 14.17330 14.17330 14.17330 24580 0.00000 1.00000 0.00000 1 0.00000 0.00000 1`);
+
+  S.sheets.forEach((sheet,si)=>{
+    const {rows,cols,cells,label,side}=sheet;
+    const totalPages=cells.filter(c=>c.page!=null).length;
+    L.push(`%SSiSignature: |${sigName}${side==='back'?' back':''}| ${totalPages} 6 1 2 ''`);
+    L.push(`%SSiPressSheet: ${fmt(sw)} ${fmt(sh)} 0.00000 0.00000 0 283.46457 4 14.17323 19`);
+    if(useMarks) L.push(TPL_SMARTMARKS);
+    L.push(TPL_MATRIX);
+    cells.filter(cd=>cd.page!=null).forEach(cd=>{
+      const x=calcX(cd.col,cols), y=calcY(cd.row,rows);
+      const rot=cd.rotated?7:5;
+      L.push(`%SSiPrshPage: ${fmt(x)} ${fmt(y)} ${fmt(pw)} ${fmt(ph)} ${rot} ${cd.page} 0 14.17300 14.17300 14.17300 14.17300 24580 0.00000 1.00000 0.00000 1 0.00000 0.00000 1`);
+      L.push(`%SSiPrshMark: 0.00000 14.17294 0.00000 14.17294 5 0.00000 '' 0.00000 0 100 100 100 100 3 1 1 1 0 0.00000 0.00000 0 0`);
+      L.push(`%SSiPrshMark: 14.17294 0.00000 14.17294 0.00000 7 0.00000 '' 0.00000 0 100 100 100 100 3 1 1 1 0 0.00000 0.00000 0 0`);
+    });
+    L.push(`%SSiPrshMatrix: 7 -1.00000 0.00000 0`);
+  });
+  return L.join('\r\n');
+}
+
+// ─── JOB GENERATION ──────────────────────────────────────────────
+function genJob() {
+  const tplName=document.getElementById('p-tpl').value.trim()||'NewTemplate';
+  const sigName=document.getElementById('p-sig').value.trim()||'72x104';
+  const base=document.getElementById('p-path').value.trim().replace(/\/$/,'');
+  const folder=document.getElementById('p-folder').value.trim().replace(/\/$/,'');
+  const pdfBase=document.getElementById('p-pdf').value.trim();
+  const ts=Math.floor(Date.now()/1000);
+  const pdfPath=folder?`${base}/${folder}`:base;
+
+  const pages=new Set();
+  S.sheets.forEach(sh=>sh.cells.forEach(cd=>{if(cd.page!=null)pages.add(cd.page)}));
+  const sorted=[...pages].sort((a,b)=>a-b);
+
+  const L=[];
+  L.push('%!PS');
+  L.push(`% Job: ${S.meta.order_number||''} ${S.meta.order_name||''}`);
+  L.push(`% Template: ${tplName}  Engine: ${currentEngine}`);
+  L.push('%%FileEncoding: 134217984');
+  L.push('%%Creator: Preps 5.3.3   Windows Win32');
+  L.push('%SSiPrepsVer: 1');
+  sorted.forEach(pg=>{
+    const idx=pg+5, pad=String(pg).padStart(4,'0');
+    const fn=pdfBase?`${pdfBase}.p${pad}.pdf`:`page_${pad}.pdf`;
+    L.push(`%SSiJobFileRef: ${idx} '${pdfPath}/${fn}' ${idx} ${ts} 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 ${ts}`);
+  });
+  L.push(`%SSiJobFileRef: -1 'Blank Page' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1`);
+  L.push(`%SSiJobFileRef: -2 'LW/CT Single' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1`);
+  L.push(`%SSiJobFileRef: -3 'LW/CT Reader Left' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1`);
+  L.push(`%SSiJobFileRef: -4 'LW/CT Reader Right' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1`);
+  sorted.forEach(pg=>L.push(`%SSiJobPage: ${pg+5} 1 0.00012 0.00010 1.00000 1.00000 3 0.00000 0.00000 '' 1 -1 1`));
+  L.push(`%SSiLaySpecs: 1 0 0.00000 0.00000 '' 0.00000 0.00000 0.00000 0.00000 1.00000 1.00000 14.17294 0 '' '' '' 4 1 1 '' 0`);
+  S.sheets.forEach((sh,si)=>{
+    const pgs=sh.cells.filter(cd=>cd.page!=null).map(cd=>cd.page).sort((a,b)=>a-b);
+    if(!pgs.length)return;
+    const first=pgs[0]+5, last=pgs[pgs.length-1]+5;
+    const lbl=sh.side==='back'?`${sigName} back`:sigName;
+    L.push(`%SSiSigUsed: '${tplName}' '${lbl}' 0 0 '' '' '' 10.00000 '' '' '' '' '' 0 0`);
+    L.push(`%SSiJobDelivery: ${first} ${si*2+1} 1 0 0`);
+    L.push(`%SSiJobDelivery: ${last} ${si*2+2} 1 0 0`);
+  });
+  L.push(`%SSiWindowSize: 1 0 0 295 939 4271986`);
+  L.push(`%SSiJobColor: 'Composite' 150.00000 45.00000 -1 0.00000 0.00000 0.00000 0.00000 0 0 0.00000 0.00000 0.00000 0.00000 150.00000 45.00000`);
+  L.push(`%SSiJobColor: 'Process Cyan' 150.00000 105.00000 -1 0.00000 0.00000 0.00000 0.00000 1 2 1.00000 0.00000 0.00000 0.00000 150.00000 105.00000`);
+  L.push(`%SSiJobColor: 'Process Magenta' 150.00000 75.00000 -1 0.00000 0.00000 0.00000 0.00000 2 2 0.00000 0.00000 0.00000 0.00000 150.00000 75.00000`);
+  L.push(`%SSiJobColor: 'Process Yellow' 150.00000 90.00000 -1 0.00000 0.00000 0.00000 0.00000 3 2 0.00000 0.00000 0.00000 0.00000 150.00000 90.00000`);
+  L.push(`%SSiJobColor: 'Process Black' 150.00000 45.00000 -1 0.00000 0.00000 0.00000 0.00000 4 2 0.00000 0.00000 0.00000 1.00000 150.00000 45.00000`);
+  return L.join('\r\n');
+}
+
+function dlFile(content, filename, mime) {
+  const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
+}
+function dlTpl() { dlFile(genTpl(), document.getElementById('p-tpl').value.trim()+'.tpl', 'application/postscript'); setStatus('ok','Скачан .tpl'); }
+function dlJob() { const num=document.getElementById('p-folder').value.trim().split('_')[0]||S.meta.order_number||'job'; dlFile(genJob(), num+'_imposition.job', 'application/postscript'); setStatus('ok','Скачан .job'); }
+function dlBoth() { dlTpl(); setTimeout(dlJob, 300); setStatus('ok','TPL + JOB скачаны'); }
+function previewTpl() {
+  const txt=genTpl(); const preview=txt.split('\r\n').slice(0,60).join('\n')+'\n\n... (продолжение)';
+  const w=document.getElementById('jpw'); w.style.display='block';
+  w.innerHTML=`<div class="jp"><div class="jph"><span>PREVIEW .TPL (60 строк)</span><button class="btn bgh bsm" onclick="document.getElementById('jpw').style.display='none'">✕</button></div><pre class="jc">${preview.replace(/</g,'&lt;')}</pre></div>`;
+}
+</script>
+</body>
+</html>
