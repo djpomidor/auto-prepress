@@ -20,6 +20,10 @@ import config
 _PENDING_PREVIEW_DIR  = os.path.join(tempfile.gettempdir(), "ImpoReader")
 _PENDING_PREVIEW_PATH = os.path.join(_PENDING_PREVIEW_DIR, "pending_preview.jpg")
 
+# Превью спецификации по умолчанию открывается на 200% (множитель
+# поверх масштаба "вписать в окно" — см. _render_preview)
+_DEFAULT_PREVIEW_ZOOM = 2.0
+
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
 DARK_SF2 = "#242424"
@@ -230,6 +234,7 @@ class OrderPage(ctk.CTkFrame):
         # Переменные формы
         self.v_number      = tk.StringVar()
         self.v_name        = tk.StringVar()
+        self.v_customer    = tk.StringVar()
         self.v_description = tk.StringVar()
         self.v_format      = tk.StringVar()   # "Ширина x Высота", напр. "150x225"
         self.v_circ        = tk.StringVar()
@@ -255,7 +260,12 @@ class OrderPage(ctk.CTkFrame):
         if order_id:
             self._load_order(order_id)
         else:
-            self._load_pending_preview_temp()
+            # ВАЖНО: новый заказ всегда открывается "с чистого листа" —
+            # старое превью/данные предыдущей (незавершённой) сессии
+            # больше НЕ подтягиваются автоматически, чтобы не путать
+            # с данными текущего заказа. Файл во временной папке (если
+            # есть) удаляем сразу же.
+            self._clear_pending_preview_temp()
 
     # ── BUILD ─────────────────────────────────────────────────────
     def _build(self):
@@ -297,7 +307,7 @@ class OrderPage(ctk.CTkFrame):
         left.pack(fill="both", expand=True)
 
         self._build_drop_zone(left)
-        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=12)
+        ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=6)
         self._build_form(left)
         self._build_action_buttons(left)
 
@@ -373,7 +383,7 @@ class OrderPage(ctk.CTkFrame):
 
         self._preview_pil_image = None   # оригинал (полное разрешение)
         self._preview_tk_image  = None   # текущая отрисованная картинка (ссылка для GC)
-        self._preview_zoom      = 1.0    # множитель поверх масштаба "вписать в окно"
+        self._preview_zoom      = _DEFAULT_PREVIEW_ZOOM    # множитель поверх масштаба "вписать в окно"
 
         self._preview_canvas.bind("<Configure>", lambda e: self._render_preview())
         # Зум колесом мыши
@@ -482,7 +492,7 @@ class OrderPage(ctk.CTkFrame):
                 img = Image.open(path)
                 img.load()
             self._preview_pil_image = img
-            self._preview_zoom = 1.0
+            self._preview_zoom = _DEFAULT_PREVIEW_ZOOM
             # Пока заказ не создан (папки на P: нет) — сохраняем превью
             # во временную папку, чтобы не потерять его при переходе
             # между страницами приложения.
@@ -530,6 +540,32 @@ class OrderPage(ctk.CTkFrame):
                 os.remove(_PENDING_PREVIEW_PATH)
         except Exception:
             pass
+
+    def _clear_form_and_preview(self):
+        """Полный сброс формы и превью — вызывается при открытии
+        страницы нового заказа и перед распознаванием очередной
+        спецификации, чтобы данные предыдущего заказа/файла не
+        подмешивались к новым."""
+        for var in (
+            self.v_number, self.v_name, self.v_customer, self.v_description,
+            self.v_format, self.v_circ, self.v_binding,
+            self.v_pages_block, self.v_pages_cover, self.v_pages_insert,
+            self.v_color_block, self.v_color_cover, self.v_color_insert,
+            self.v_paper_block, self.v_paper_cover, self.v_paper_insert,
+            self.v_lak, self.v_delivery, self.v_submit, self.v_due,
+        ):
+            var.set("")
+
+        if self.txt_tech_notes:
+            self.txt_tech_notes.delete("1.0", "end")
+
+        self._preview_pil_image = None
+        self._preview_zoom = _DEFAULT_PREVIEW_ZOOM
+        if hasattr(self, "_preview_canvas"):
+            self._render_preview()
+
+        if hasattr(self, "_mismatch_bar"):
+            self._mismatch_bar.grid_remove()
 
     def _save_preview_jpg(self, pdf_path: str, folder_path: str):
         """Сохраняет JPG превью первой страницы PDF-спецификации в
@@ -599,26 +635,24 @@ class OrderPage(ctk.CTkFrame):
         sec.grid_columnconfigure(1, weight=1, uniform="col")
 
         # Поля спецификации — размещаются в две колонки, по одному
-        # блоку label+entry на ячейку. "если есть" (Скрепление, Объём
-        # обл./вкл., Красочность обл./вклейки) — эти поля можно
-        # оставить пустыми, они не обязательны для сохранения заказа.
+        # блоку label+entry на ячейку. Необязательные поля можно
+        # оставить пустыми — они не обязательны для сохранения заказа.
+        # "Тираж" и "Бумага блок/обл./вкл." не показываем в форме, но
+        # значения по-прежнему сохраняются в БД (задаются через OCR).
         fields = [
-            ("Номер заказа",        self.v_number,       "Например: 0641"),
-            ("Название",            self.v_name,         "До 32 символов"),
-            ("Описание заказа",     self.v_description,  "книга / брошюра / газета..."),
-            ("Формат",              self.v_format,        "Ширина x Высота, напр. 150x225"),
-            ("Тираж",                self.v_circ,          ""),
-            ("Скрепление",           self.v_binding,       "Термоклей / Скрепка / Тв. переплёт"),
-            ("Объём блок",           self.v_pages_block,   "кол-во полос"),
-            ("Объём обл.",           self.v_pages_cover,   "кол-во полос"),
-            ("Объём вкл.",           self.v_pages_insert,  "кол-во полос"),
-            ("Красочность блока",    self.v_color_block,   "напр. 4+4"),
-            ("Красочность обложки",  self.v_color_cover,   "напр. 4+0"),
-            ("Красочность вклейки",  self.v_color_insert,  "напр. 4+4"),
-            ("Бумага блок",          self.v_paper_block,   "напр. офсет. 80"),
-            ("Бумага обл.+подл.",    self.v_paper_cover,   "напр. мат. 200"),
-            ("Бумага вкл.",          self.v_paper_insert,  "если есть"),
-            ("Лак",                  self.v_lak,           "если есть"),
+            ("Номер заказа",           self.v_number,       "Например: 0641"),
+            ("Название",               self.v_name,         "До 32 символов"),
+            ("Заказчик (организация)", self.v_customer,     "ООО \"...\""),
+            ("Описание заказа",        self.v_description,  "книга / брошюра / газета..."),
+            ("Формат",                 self.v_format,       "Ширина x Высота, напр. 150x225"),
+            ("Скрепление",             self.v_binding,      "скрепка / термоклей / твердый переплёт"),
+            ("Объём блок",             self.v_pages_block,  "кол-во полос"),
+            ("Красочность блока",      self.v_color_block,  "напр. 4+4"),
+            ("Объём обл.",             self.v_pages_cover,  "кол-во полос"),
+            ("Красочность обл.",       self.v_color_cover,  "напр. 4+0"),
+            ("Объём вкл.",             self.v_pages_insert, "кол-во полос"),
+            ("Красочность вкл.",       self.v_color_insert, "напр. 4+4"),
+            ("Лак",                    self.v_lak,          "если есть"),
         ]
 
         for i, (label, var, hint) in enumerate(fields):
@@ -692,9 +726,11 @@ class OrderPage(ctk.CTkFrame):
         hdr.grid(row=0, column=0, sticky="ew")
         hdr.grid_propagate(False)
 
-        _label(hdr, "РЕЗУЛЬТАТЫ PREFLIGHT (PitStop)").pack(
-            side="left", padx=16, pady=8
-        )
+        ctk.CTkLabel(
+            hdr, text="РЕЗУЛЬТАТЫ PREFLIGHT (PitStop)",
+            font=("JetBrains Mono", 12, "bold"), text_color=("gray40","gray60"),
+            anchor="w",
+        ).pack(side="left", padx=16, pady=8)
 
         ctk.CTkButton(
             hdr, text="↺ Обновить", width=90, height=24,
@@ -718,7 +754,7 @@ class OrderPage(ctk.CTkFrame):
         for w in self.pitstop_list.winfo_children():
             w.destroy()
         ctk.CTkLabel(
-            self.pitstop_list, text=text, font=("JetBrains Mono", 11),
+            self.pitstop_list, text=text, font=("JetBrains Mono", 13),
             text_color=TEXT3, justify="left",
         ).pack(anchor="w", padx=12, pady=12)
 
@@ -739,34 +775,34 @@ class OrderPage(ctk.CTkFrame):
             block.pack(fill="x", padx=8, pady=6)
 
             top = ctk.CTkFrame(block, fg_color="transparent")
-            top.pack(fill="x", padx=10, pady=(8, 2))
+            top.pack(fill="x", padx=10, pady=(10, 4))
 
             status_color = DANGER if rep["errors"] else (WARNING if rep["warnings"] else SUCCESS)
             ctk.CTkLabel(
                 top, text=rep["dt"].strftime("%d.%m.%Y  %H:%M:%S"),
-                font=("JetBrains Mono", 12, "bold"), text_color=status_color,
+                font=("JetBrains Mono", 15, "bold"), text_color=status_color,
                 anchor="w",
             ).pack(side="left")
 
             ctk.CTkLabel(
-                top, text=rep["fname"], font=("JetBrains Mono", 9),
+                top, text=rep["fname"], font=("JetBrains Mono", 11),
                 text_color=TEXT3,
             ).pack(side="right")
 
             if rep["pdf_path"]:
                 link = ctk.CTkLabel(
                     block, text="🔗 Открыть PDF лога в Acrobat",
-                    font=("JetBrains Mono", 10, "underline"),
+                    font=("JetBrains Mono", 12, "underline"),
                     text_color=ACCENT, cursor="hand2", anchor="w",
                 )
-                link.pack(anchor="w", padx=10, pady=(0, 4))
+                link.pack(anchor="w", padx=10, pady=(0, 6))
                 link.bind("<Button-1>", lambda e, p=rep["pdf_path"]: self._open_in_acrobat(p))
 
             body = ctk.CTkLabel(
-                block, text=rep["text"], font=("JetBrains Mono", 10),
-                text_color=TEXT2, justify="left", anchor="w", wraplength=280,
+                block, text=rep["text"], font=("JetBrains Mono", 13),
+                text_color=TEXT, justify="left", anchor="w", wraplength=320,
             )
-            body.pack(fill="x", padx=10, pady=(0, 10))
+            body.pack(fill="x", padx=10, pady=(0, 12))
 
     def _open_in_acrobat(self, pdf_path: str):
         import subprocess
@@ -794,6 +830,7 @@ class OrderPage(ctk.CTkFrame):
         o = self.order
         self.v_number.set(str(o.number))
         self.v_name.set(o.name or "")
+        self.v_customer.set(o.customer or "")
         self.v_description.set(o.description or "")
         self.v_circ.set(str(o.circulation) if o.circulation else "")
         self.v_binding.set(o.binding or "")
@@ -948,8 +985,13 @@ class OrderPage(ctk.CTkFrame):
             session.close()
 
     def _process_spec(self, path: str):
-        # Сначала переносим файл в папку заказа на P: (если она уже
-        # есть), и только потом распознаём.
+        # Сначала полностью очищаем форму/превью — иначе при повторном
+        # перетаскивании файла в это же окно оставались бы данные
+        # предыдущего распознавания.
+        self._clear_form_and_preview()
+
+        # Переносим файл в папку заказа на P: (если она уже есть), и
+        # только потом распознаём.
         staged_path = self._stage_spec_file(path)
 
         self.drop_lbl.configure(
@@ -989,6 +1031,7 @@ class OrderPage(ctk.CTkFrame):
 
         if data.get("number"):      self.v_number.set(str(data["number"]))
         if data.get("name"):        self.v_name.set(data["name"])
+        if data.get("client"):      self.v_customer.set(data["client"])
         if data.get("description"): self.v_description.set(data["description"])
         if data.get("binding"):     self.v_binding.set(data["binding"])
         if data.get("width") and data.get("height"):
@@ -1060,6 +1103,7 @@ class OrderPage(ctk.CTkFrame):
 
             o.number        = number
             o.name          = name
+            o.customer      = self.v_customer.get().strip() or None
             o.description   = self.v_description.get().strip() or None
             o.binding       = self.v_binding.get().strip()
             o.created       = o.created or datetime.now()
@@ -1177,6 +1221,7 @@ class OrderPage(ctk.CTkFrame):
             for tag, val in [
                 ("number", str(o.number)),
                 ("name",   o.name),
+                ("customer", o.customer or ""),
                 ("description", o.description or ""),
                 ("binding", o.binding),
                 ("width",  str(o.width or "")),

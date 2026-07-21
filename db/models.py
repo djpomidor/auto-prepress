@@ -111,6 +111,7 @@ class Order(Base):
     paper_cover    = Column(String(64),  nullable=True)   # Бумага обл.+подл.
     paper_insert   = Column(String(64),  nullable=True)   # Бумага вкл.
     lak            = Column(String(32),  nullable=True)   # Лак
+    customer       = Column(String(80),  nullable=True)   # Заказчик (организация)
     spec_path      = Column(String(256), nullable=True)   # Путь к файлу спецификации (в корне папки заказа)
 
     owners = relationship("User", secondary=order_owner_table, back_populates="orders")

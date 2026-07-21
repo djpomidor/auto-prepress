@@ -51,7 +51,6 @@ def read_spec(path: str) -> dict:
     text = _extract_text(path)
     is_pdf = (ext == ".pdf") and len(text.strip()) > 50
     cleaned = _clean(text, is_pdf=is_pdf)
-    print(f"[Spec] Cleaned (первые 200):\n{cleaned[:200]}")
     data = _parse(cleaned)
     data["raw_text"] = text
     return data
@@ -391,7 +390,12 @@ def _parse(text: str) -> dict:
     m = re.search(r"заказчик[^)]*\)\s+(.+)", text, re.I)
     if not m:
         m = re.search(r"заказчик\s*\(организация\)\s+(.+)", text, re.I)
-    d["client"] = m.group(1).strip().split("\n")[0][:64] if m else None
+    client = m.group(1).strip().split("\n")[0][:80] if m else None
+    if client:
+        # Убираем прилипший цифровой код клиента в конце строки,
+        # напр. 'ООО "АВА-ПЕТЕР" 00000948' → 'ООО "АВА-ПЕТЕР"'
+        client = re.sub(r"\s+\d{4,}\s*$", "", client).strip()
+    d["client"] = client[:64] if client else None
 
     # ── Тираж ────────────────────────────────────────────────────
     m = re.search(r"тираж\s+(\d[\d\s]*)", text, re.I)
@@ -485,14 +489,39 @@ def _parse(text: str) -> dict:
     d["lak"] = lak[:32] if lak else None
 
     # ── Технические пояснения ────────────────────────────────────
-    # Значение всегда на той же строке, что и метка — берём только её,
-    # иначе (как раньше) при пустом поле регэксп "заезжал" на
-    # следующие строки формы ("Вид упаковки", "коробки" и т.п.).
-    m = re.search(
-        r"техническ(?:ие|ое)\s+поясн(?:ения|ение)\s*[:\-]?[^\S\n]+(.+)",
+    # Значение может занимать НЕСКОЛЬКО строк, поэтому вместо
+    # regex-lookahead (ненадёжно ведёт себя на границах строк) режем
+    # текст явно: от конца метки до ближайшей следующей метки формы.
+    label_m = re.search(
+        r"техническ(?:ие|ое)\s+поясн(?:ения|ение)[^\S\n]*[:\-]?",
         text, re.I
     )
-    d["tech_notes"] = m.group(1).strip()[:500] if m else None
+    if label_m:
+        start = label_m.end()
+        rest = text[start:]
+
+        boundary_pos = None
+
+        # "Вид упаковки": перед этой меткой в PDF часто "выныривает"
+        # значение упаковки (напр. "коробки"), отрисованное крупным
+        # шрифтом и попадающее в извлечённый текст на строку ВЫШЕ
+        # самой метки — поэтому обрезаем от начала этой строки, а не
+        # от самой метки.
+        m_vu = re.search(r"\n[^\n]*\n[^\S\n]*вид\s+упаковки\b", rest, re.I)
+        if m_vu:
+            boundary_pos = m_vu.start()
+
+        for pat in (r"\bдата\s+сдачи\b", r"\bдата\s+заполнения\b",
+                    r"\bдата\s+в\s+печать\b", r"\bрезультаты\s+проверки\b"):
+            m2 = re.search(pat, rest, re.I)
+            if m2 and (boundary_pos is None or m2.start() < boundary_pos):
+                boundary_pos = m2.start()
+
+        end = start + boundary_pos if boundary_pos is not None else len(text)
+        note = text[start:end].strip()
+        d["tech_notes"] = note[:500] if note else None
+    else:
+        d["tech_notes"] = None
 
     # ── Даты ─────────────────────────────────────────────────────
     d["due_date"]      = _find_date(text, r"дата\s+в\s+печать")
