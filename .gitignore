@@ -1,5 +1,8 @@
 # Временные файлы и кэш Python
 __pycache__/
+services/__pycache__
+ui/__pycache__
+db/__pycache__
 *.pyc
 *.pyo
 *.pyd
