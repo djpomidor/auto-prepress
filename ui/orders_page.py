@@ -85,7 +85,7 @@ class OrdersPage(ctk.CTkFrame):
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
         vsb.pack(side="right", fill="y")
 
-        cols = ("number", "name", "binding", "status", "created")
+        cols = ("number", "name", "description", "format", "binding", "status", "created")
         self.tree = ttk.Treeview(
             table_frame, columns=cols, show="headings",
             style="Orders.Treeview",
@@ -94,11 +94,13 @@ class OrdersPage(ctk.CTkFrame):
         vsb.configure(command=self.tree.yview)
 
         headers = {
-            "number":  ("№",          70,  "center"),
-            "name":    ("Название",   380, "w"),
-            "binding": ("Скрепление", 120, "center"),
-            "status":  ("Мониторинг", 120, "center"),
-            "created": ("Создан",     160, "center"),
+            "number":      ("№",              70,  "center"),
+            "name":        ("Название",       260, "w"),
+            "description": ("Описание заказа",150, "w"),
+            "format":      ("Формат",         100, "center"),
+            "binding":     ("Скрепление",     130, "center"),
+            "status":      ("Мониторинг",     130, "center"),
+            "created":     ("Создан",         150, "center"),
         }
         for col, (label, width, anchor) in headers.items():
             self.tree.heading(col, text=label,
@@ -116,6 +118,9 @@ class OrdersPage(ctk.CTkFrame):
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Return>",   self._on_double_click)
+        # Отдельная обработка клика по колонке "Мониторинг" — работает
+        # как кнопка-переключатель, не открывая сам заказ.
+        self.tree.bind("<Button-1>", self._on_click, add="+")
 
         # Статус-бар
         self._status_bar = ctk.CTkLabel(
@@ -142,6 +147,12 @@ class OrdersPage(ctk.CTkFrame):
             orders.sort(key=lambda o: o.number, reverse=rev)
         elif self._sort_col == "name":
             orders.sort(key=lambda o: (o.name or "").lower(), reverse=rev)
+        elif self._sort_col == "description":
+            orders.sort(key=lambda o: (o.description or "").lower(), reverse=rev)
+        elif self._sort_col == "format":
+            orders.sort(key=lambda o: (o.width or 0, o.height or 0), reverse=rev)
+        elif self._sort_col == "binding":
+            orders.sort(key=lambda o: (o.binding or "").lower(), reverse=rev)
         elif self._sort_col == "created":
             orders.sort(key=lambda o: o.created or datetime.min, reverse=rev)
         elif self._sort_col == "status":
@@ -154,14 +165,17 @@ class OrdersPage(ctk.CTkFrame):
             else:
                 tag = ("even",) if i % 2 == 0 else ("odd",)
 
+            fmt = f"{o.width}×{o.height}" if o.width and o.height else "—"
             created = o.created.strftime("%d.%m.%Y %H:%M") if o.created else "—"
             self.tree.insert(
                 "", "end", iid=str(o.id),
                 values=(
                     f"{o.number:04d}",
                     o.name or "",
+                    o.description or "—",
+                    fmt,
                     o.binding or "—",
-                    "● ВКЛ" if o.monitoring else "—",
+                    "⬤  ВКЛ" if o.monitoring else "○  ВЫКЛ",
                     created,
                 ),
                 tags=tag,
@@ -170,6 +184,62 @@ class OrdersPage(ctk.CTkFrame):
         n = len(orders)
         self._count_lbl.configure(text=f"{n} заказов")
         self._status_bar.configure(text=f"  Загружено: {n}")
+
+    def _on_click(self, event):
+        """
+        Клик по колонке "Мониторинг" работает как кнопка-переключатель
+        (Treeview не поддерживает встроенные виджеты в ячейках — стиль
+        кнопки имитируется цветом/значком, но переключение по клику
+        работает по-настоящему).
+        """
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        row = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        if not row:
+            return
+        try:
+            col_index = int(col.replace("#", "")) - 1
+            col_name = self.tree["columns"][col_index]
+        except (ValueError, IndexError):
+            return
+        if col_name != "status":
+            return
+        self._toggle_monitoring(int(row))
+        return "break"  # не даём клику дальше выделять/открывать заказ
+
+    def _toggle_monitoring(self, order_id: int):
+        session = get_session()
+        try:
+            o = session.get(Order, order_id)
+            if not o:
+                return
+            o.monitoring = not o.monitoring
+            new_state = o.monitoring
+            folder_path = o.folder_path
+            session.commit()
+        finally:
+            session.close()
+
+        from services.monitor_manager import MonitorManager
+        import os as _os
+        if new_state:
+            if folder_path and _os.path.isdir(_os.path.join(folder_path, "in")):
+                MonitorManager().start_order(order_id, folder_path, callback=None)
+            else:
+                # Папки нет — включать мониторинг бессмысленно, откатываем
+                session2 = get_session()
+                try:
+                    o2 = session2.get(Order, order_id)
+                    o2.monitoring = False
+                    session2.commit()
+                finally:
+                    session2.close()
+        else:
+            MonitorManager().stop_order(order_id)
+
+        self._reload()
 
     def _sort_by(self, col: str):
         if self._sort_col == col:
