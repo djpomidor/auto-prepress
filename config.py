@@ -47,7 +47,7 @@ DEFAULTS = {
     # общая hot-папка Prinergy, настроенная на ОДИН процесс-шаблон
     # Refine to PDF с фиксированным (Direct) путём вывода результата
     # в prinergy_refine_out (тем же для всех заказов).
-    "prinergy_refine_in": r"",
+    "prinergy_refine_in": r"P:\_PrinergyRefined",
 
     # Куда Prinergy Evo кладёт отрефайненные файлы (общая для всех
     # заказов папка — задаётся как Direct output path в разделе File
@@ -55,7 +55,7 @@ DEFAULTS = {
     # prinergy_refine_in). ImpoFlow сам следит за этой папкой
     # (RefineRouter) и по префиксу "<папка_заказа>~~" в имени файла
     # раскладывает результат обратно в in\ нужного заказа.
-    "prinergy_refine_out": r"",
+    "prinergy_refine_out": r"P:\_PrinergyRefined\Вывод",
 
     # ── Ollama ────────────────────────────────────────────────────
     "ollama_url":   "http://localhost:11434/api/generate",
