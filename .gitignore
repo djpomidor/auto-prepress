@@ -1,1 +1,14 @@
+# Временные файлы и кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Настройки VS Code
+.vscode/
+
+
 impo_reader.db
+__init__.py
