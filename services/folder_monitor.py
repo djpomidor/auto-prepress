@@ -113,13 +113,12 @@ class FolderMonitor:
         )
         self._status = self._load_status()
 
-        # Запоминаем что уже было
+        # Запоминаем что уже было (включая подпапки New, New1, New2...
+        # — некоторые FTP/приёмники кладут обновлённые версии файла
+        # именно туда, вместо перезаписи файла в корне in\)
         if os.path.isdir(in_path):
-            self._known_files = set(
-                f for f in os.listdir(in_path)
-                if f.lower().endswith(".pdf")
-            )
-            log.debug(f"Уже в папке: {self._known_files}")
+            self._known_files = set(self._scan_pdfs(in_path))
+            log.debug(f"Уже в папке (рекурсивно): {self._known_files}")
 
     # ── СТАТУСЫ (для правила "не проверять повторно") ───────────────
     def _load_status(self) -> dict:
@@ -188,11 +187,14 @@ class FolderMonitor:
                 monitor._on_fs_event(event.dest_path)
 
         # PollingObserver — опрашивает папку каждые N секунд
-        # Работает с сетевыми дисками, медленнее обычного Observer
+        # Работает с сетевыми дисками, медленнее обычного Observer.
+        # recursive=True — чтобы видеть файлы в подпапках New,
+        # New1, New2... (некоторые приёмники/FTP кладут туда
+        # обновлённые версии файла вместо перезаписи в корне in\).
         self._observer = PollingObserver(timeout=5)
-        self._observer.schedule(Handler(), self.in_path, recursive=False)
+        self._observer.schedule(Handler(), self.in_path, recursive=True)
         self._observer.start()
-        log.info(f"Мониторинг запущен (PollingObserver, 5 сек): {self.in_path}")
+        log.info(f"Мониторинг запущен (PollingObserver, 5 сек, рекурсивно): {self.in_path}")
 
         # ВАЖНО: watchdog сообщает только о файлах, появившихся ПОСЛЕ
         # старта наблюдения. Файлы, которые уже лежали в in\ до
@@ -203,31 +205,43 @@ class FolderMonitor:
         # обрабатываем такие "старые" необработанные файлы.
         self._process_existing_files()
 
+    @staticmethod
+    def _scan_pdfs(root_dir: str):
+        """Рекурсивно находит все .pdf в папке (включая New/New1/...).
+        Возвращает список ИМЁН файлов (basename)."""
+        found = []
+        for dirpath, _dirnames, filenames in os.walk(root_dir):
+            for fn in filenames:
+                if fn.lower().endswith(".pdf"):
+                    found.append(fn)
+        return found
+
     def _process_existing_files(self):
         if not os.path.isdir(self.in_path):
             return
-        for fname in os.listdir(self.in_path):
-            if not fname.lower().endswith(".pdf"):
-                continue
-            path = os.path.join(self.in_path, fname)
-            if fname in self._processing:
-                continue
+        for dirpath, _dirnames, filenames in os.walk(self.in_path):
+            for fname in filenames:
+                if not fname.lower().endswith(".pdf"):
+                    continue
+                path = os.path.join(dirpath, fname)
+                if fname in self._processing:
+                    continue
 
-            if _is_refined(fname):
-                needs_processing = True  # решение всегда по статусу родителя — безопасно повторить
-            else:
-                stem = os.path.splitext(fname)[0]
-                info = self._status.get(stem)
-                needs_processing = (
-                    not info or info.get("signature") != self._file_signature(path)
-                )
+                if _is_refined(fname):
+                    needs_processing = True  # решение всегда по статусу родителя — безопасно повторить
+                else:
+                    stem = os.path.splitext(fname)[0]
+                    info = self._status.get(stem)
+                    needs_processing = (
+                        not info or info.get("signature") != self._file_signature(path)
+                    )
 
-            if needs_processing:
-                log.info(f"Обрабатываю файл, обнаруженный при старте мониторинга: {fname}")
-                self._processing.add(fname)
-                threading.Thread(
-                    target=self._route_new_file, args=(path, fname), daemon=True
-                ).start()
+                if needs_processing:
+                    log.info(f"Обрабатываю файл, обнаруженный при старте мониторинга: {path}")
+                    self._processing.add(fname)
+                    threading.Thread(
+                        target=self._route_new_file, args=(path, fname), daemon=True
+                    ).start()
 
     def stop(self):
         if self._observer:
@@ -531,6 +545,19 @@ class RefineRouter:
                 return
 
             order_folder, real_name = fname.split(PREFIX_SEP, 1)
+
+            # ВАЖНО: при рефайне ОДНОСТРАНИЧНОГО PDF в этой настройке
+            # Prinergy НЕ дописывает суффикс — просто кладёт файл с
+            # ТЕМ ЖЕ именем, что и на входе. Без явного суффикса
+            # FolderMonitor не отличит такой результат от нового
+            # "сырого" файла заказчика и отправит его на рефайн ещё
+            # раз — зацикливание. Поэтому если имя не похоже ни на
+            # многостраничный (.pNNNN.pdf), ни на уже промаркированный
+            # одностраничный (.новый.pdf) результат — маркируем сами.
+            if not _is_refined(real_name):
+                _stem, _ext = os.path.splitext(real_name)
+                real_name = f"{_stem}.новый{_ext}"
+                log.info(f"RefineRouter: Prinergy не добавил суффикс — помечаю сам: {real_name}")
 
             import config
             orders_root = config.CFG.get("orders_root", "")
