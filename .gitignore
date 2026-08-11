@@ -15,3 +15,7 @@ db/__pycache__
 
 impo_reader.db
 __init__.py
+
+
+build/
+main.spec

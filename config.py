@@ -34,6 +34,11 @@ DEFAULTS = {
     # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
     "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
 
+    # ── Открытие .tpl шаблонов в Preps ────────────────────────────
+    # Если оставить "" — .tpl откроется через ассоциацию файлов
+    # Windows (обычно этого достаточно, если Preps уже установлен).
+    "preps_path": r"",
+
     # ── Poppler (pdftoppm/pdfinfo) для рендера PDF → изображение ────
     # Укажите путь к папке Library\bin из архива Poppler, если она НЕ
     # добавлена в системный PATH, например:

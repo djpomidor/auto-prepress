@@ -1366,4 +1366,5 @@ class OrderPage(ctk.CTkFrame):
     # ── IMPOSITION ────────────────────────────────────────────────
     def _open_imposition(self):
         if self.order_id:
-            self.app.show_imposition(self.order_id)
+            order_number = self.order.number if self.order else None
+            self.app.show_imposition(self.order_id, order_number)

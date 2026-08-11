@@ -3,11 +3,17 @@
 """
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import ttk
+from tkinter import filedialog, messagebox
 import threading
 import base64
 import json
 import os
+import re
+import subprocess
+import config
+from db.database import get_session
+from db.models import Order
 
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
@@ -20,30 +26,175 @@ TEXT     = "#e8e8e8"
 TEXT2    = "#888888"
 TEXT3    = "#555555"
 DANGER   = "#ff5555"
+SUCCESS  = "#33cc66"
 INFO     = "#55aaff"
 WARNING  = "#ffaa33"
+
+# ── Разбор имён файлов шаблонов Preps ────────────────────────────────
+# Пример: 0055_MadBombers_173x260_64x90_Skrepka.tpl
+#         номер_название_обрезнойформат_форматбумаги_скрепление.tpl
+_TEMPLATE_RE = re.compile(
+    r'^(?P<order>\d+)_(?P<name>.+?)_(?P<trim_w>\d+)[xхX](?P<trim_h>\d+)_'
+    r'(?P<paper_w>\d+)[xхX](?P<paper_h>\d+)_(?P<binding>[^_.]+)\.tpl$',
+    re.IGNORECASE,
+)
+
+_TRANSLIT = {
+    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z',
+    'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
+    'с':'s','т':'t','у':'u','ф':'f','х':'h','ц':'ts','ч':'ch','ш':'sh','щ':'sch',
+    'ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+}
+
+
+def _norm_token(text: str) -> str:
+    """Транслитерация кириллицы в латиницу + приведение к нижнему
+    регистру, только буквы/цифры — чтобы сравнивать "скрепка" (из
+    заказа) с "Skrepka" (из имени файла шаблона), не завися от
+    конкретной транслитерации/регистра."""
+    if not text:
+        return ""
+    out = []
+    for ch in text:
+        low = ch.lower()
+        if low in _TRANSLIT:
+            out.append(_TRANSLIT[low])
+        elif low.isalnum():
+            out.append(low)
+    return "".join(out)
+
+
+def _binding_matches(order_binding: str, template_binding: str) -> bool:
+    """Сравнивает скрепление заказа (по-русски, напр. "скрепка") с
+    токеном из имени файла шаблона (обычно транслит, напр. "Skrepka").
+    Точной единой конвенции именования может не быть на 100% —
+    поэтому сравниваем транслитерированные строки как
+    подстроку/префикс друг друга, а не только на точное совпадение.
+    """
+    a = _norm_token(order_binding)
+    b = _norm_token(template_binding)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # частичное совпадение по началу слова (напр. "termokley" vs
+    # "termokleevoe") — берём первые 5 символов как достаточно
+    # уникальный признак типа скрепления
+    prefix_len = min(5, len(a), len(b))
+    return a[:prefix_len] == b[:prefix_len] or a in b or b in a
+
+
+def _scan_preps_templates(order) -> list:
+    """
+    Ищет .tpl шаблоны Preps в папках config.preps_templates,
+    подходящие под обрезной формат и тип скрепления заказа.
+    Возвращает список словарей, отсортированный по имени.
+    """
+    if not order or not order.width or not order.height:
+        return []
+
+    dirs = config.CFG.get("preps_templates", [])
+    trim_pair = {int(order.width), int(order.height)}
+    binding = (order.binding or "").strip()
+
+    results = []
+    seen_paths = set()
+    for d in dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            entries = os.listdir(d)
+        except Exception:
+            continue
+        for fname in entries:
+            if not fname.lower().endswith(".tpl"):
+                continue
+            m = _TEMPLATE_RE.match(fname)
+            if not m:
+                continue
+            try:
+                tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
+            except ValueError:
+                continue
+            if {tw, th} != trim_pair:
+                continue
+            if binding and not _binding_matches(binding, m.group("binding")):
+                continue
+
+            path = os.path.join(d, fname)
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            results.append({
+                "fname": fname,
+                "path": path,
+                "source_dir": d,
+                "order_num": m.group("order"),
+                "name": m.group("name"),
+                "trim": f"{tw}x{th}",
+                "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
+                "binding": m.group("binding"),
+            })
+
+    results.sort(key=lambda r: r["fname"].lower())
+    return results
+
 
 class ImpositionPage(ctk.CTkFrame):
     def __init__(self, parent, app, order_id: int = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.app = app
         self.order_id = order_id
+        self.order = None
         self._img_path = None
         self._sheets = []
 
+        if order_id:
+            session = get_session()
+            try:
+                self.order = session.get(Order, order_id)
+            finally:
+                session.close()
+
         self._build()
+        self._refresh_templates()
 
     # ── LAYOUT ────────────────────────────────────────────────────
     def _build(self):
-        self.grid_columnconfigure(0, weight=0, minsize=310)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        # Три панели, как на странице заказа: левая (контролы) —
+        # центр (сетка спуска) — правая (шаблоны Preps). Границы
+        # можно перетаскивать.
+        self.pack_propagate(False)
+        try:
+            win_w = self.app.cfg.get("window_width", 1400)
+        except Exception:
+            win_w = 1400
+        left_default_w  = 320
+        right_default_w = max(320, int(win_w * 0.25))
 
-        # ── Левая панель ──────────────────────────────────────────
-        left = ctk.CTkScrollableFrame(
-            self, fg_color=("gray90","gray17"), corner_radius=0, width=310
+        is_dark = ctk.get_appearance_mode().lower() == "dark"
+        sash_bg = "#242424" if is_dark else "#d5d5d5"
+
+        self._paned = tk.PanedWindow(
+            self, orient="horizontal", sashwidth=6, sashrelief="flat",
+            bg=sash_bg, bd=0,
         )
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
+        self._paned.pack(fill="both", expand=True)
+
+        # ── Левая панель — контролы ──────────────────────────────
+        # ВАЖНО: CTkScrollableFrame нельзя добавлять в PanedWindow
+        # напрямую (сложная внутренняя структура canvas/frame) —
+        # оборачиваем в обычный CTkFrame-контейнер.
+        left_container = ctk.CTkFrame(
+            self._paned, fg_color=("gray90","gray17"), corner_radius=0,
+        )
+        self._paned.add(left_container, width=left_default_w, minsize=280, stretch="never")
+
+        left = ctk.CTkScrollableFrame(
+            left_container, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=DARK_BD,
+        )
+        left.pack(fill="both", expand=True)
 
         def lbl(t):
             return ctk.CTkLabel(
@@ -224,10 +375,129 @@ class ImpositionPage(ctk.CTkFrame):
                 command=cmd,
             ).pack(fill="x", padx=16, pady=2)
 
-        # ── Правая панель ─────────────────────────────────────────
-        self.right = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
-        self.right.grid(row=0, column=1, sticky="nsew")
+        # ── Центральная панель — сетка спуска ────────────────────
+        self.center = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
+        self._paned.add(self.center, minsize=300, stretch="always")
         self._build_empty_state()
+
+        # ── Правая панель — шаблоны Preps ────────────────────────
+        right_container = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
+        right_container.grid_rowconfigure(0, weight=1)
+        right_container.grid_columnconfigure(0, weight=1)
+        self._paned.add(right_container, width=right_default_w, minsize=280, stretch="never")
+        self._build_templates_panel(right_container)
+
+    # ── ШАБЛОНЫ PREPS ────────────────────────────────────────────
+    def _build_templates_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=("gray90","gray17"), corner_radius=0)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.grid_rowconfigure(2, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        hdr = ctk.CTkFrame(frame, fg_color=("gray85","gray20"), height=36, corner_radius=0)
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid_propagate(False)
+        ctk.CTkLabel(
+            hdr, text="ШАБЛОНЫ PREPS",
+            font=("JetBrains Mono", 12, "bold"), text_color=("gray40","gray60"),
+            anchor="w",
+        ).pack(side="left", padx=16, pady=8)
+        ctk.CTkButton(
+            hdr, text="↺", width=28, height=24,
+            font=("JetBrains Mono", 12),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._refresh_templates,
+        ).pack(side="right", padx=10, pady=6)
+
+        self._templates_criteria_lbl = ctk.CTkLabel(
+            frame, text="", font=("JetBrains Mono", 10),
+            text_color=TEXT3, justify="left", anchor="w", wraplength=280,
+        )
+        self._templates_criteria_lbl.grid(row=1, column=0, sticky="ew", padx=14, pady=(10, 4))
+
+        self.templates_list = ctk.CTkScrollableFrame(
+            frame, fg_color="transparent",
+            scrollbar_button_color=DARK_BD,
+        )
+        self.templates_list.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
+        self.templates_list.grid_columnconfigure(0, weight=1)
+
+    def _refresh_templates(self):
+        if not hasattr(self, "templates_list"):
+            return
+
+        for w in self.templates_list.winfo_children():
+            w.destroy()
+
+        if not self.order:
+            self._templates_criteria_lbl.configure(text="Заказ не найден.")
+            return
+
+        o = self.order
+        fmt = f"{o.width}×{o.height} мм" if o.width and o.height else "формат не указан"
+        binding = o.binding or "скрепление не указано"
+        self._templates_criteria_lbl.configure(
+            text=f"Заказ №{o.number:04d}\nФормат: {fmt}\nСкрепление: {binding}"
+        )
+
+        if not o.width or not o.height:
+            ctk.CTkLabel(
+                self.templates_list,
+                text="У заказа не указан обрезной формат —\nнечего сопоставлять с шаблонами.",
+                font=("JetBrains Mono", 11), text_color=TEXT3, justify="left",
+            ).pack(anchor="w", padx=12, pady=12)
+            return
+
+        templates = _scan_preps_templates(o)
+
+        if not templates:
+            dirs = [d for d in config.CFG.get("preps_templates", []) if d]
+            missing = [d for d in dirs if not os.path.isdir(d)]
+            msg = "Подходящих шаблонов не найдено."
+            if missing:
+                msg += "\n\n⚠ Недоступны папки:\n" + "\n".join(missing)
+            ctk.CTkLabel(
+                self.templates_list, text=msg,
+                font=("JetBrains Mono", 11), text_color=TEXT3, justify="left",
+            ).pack(anchor="w", padx=12, pady=12)
+            return
+
+        for tpl in templates:
+            card = ctk.CTkFrame(self.templates_list, fg_color=("gray85","gray20"),
+                                 corner_radius=6, cursor="hand2")
+            card.pack(fill="x", padx=8, pady=5)
+
+            name_lbl = ctk.CTkLabel(
+                card, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
+                text_color=ACCENT, anchor="w", justify="left", wraplength=270,
+                cursor="hand2",
+            )
+            name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
+
+            meta_lbl = ctk.CTkLabel(
+                card,
+                text=f"№{tpl['order_num']} · {tpl['trim']} мм · бумага {tpl['paper']} · {tpl['binding']}",
+                font=("JetBrains Mono", 10), text_color=TEXT3, anchor="w",
+            )
+            meta_lbl.pack(fill="x", padx=10, pady=(0, 10), anchor="w")
+
+            for widget in (card, name_lbl, meta_lbl):
+                widget.bind("<Button-1>", lambda e, p=tpl["path"]: self._open_template(p))
+
+    def _open_template(self, path: str):
+        """Открывает .tpl шаблон в программе Preps."""
+        if not os.path.isfile(path):
+            messagebox.showerror("Preps", f"Файл не найден:\n{path}")
+            return
+        preps_exe = (config.CFG.get("preps_path") or "").strip()
+        try:
+            if preps_exe and os.path.isfile(preps_exe):
+                subprocess.Popen([preps_exe, path])
+            else:
+                # Открываем через ассоциацию файлов Windows (.tpl → Preps)
+                os.startfile(path)
+        except Exception as e:
+            messagebox.showerror("Preps", f"Не удалось открыть шаблон:\n{e}")
 
     def _on_engine_change(self, value):
         if value == "ollama":
@@ -282,10 +552,10 @@ class ImpositionPage(ctk.CTkFrame):
 
     # ── PHOTO ─────────────────────────────────────────────────────
     def _build_empty_state(self):
-        for w in self.right.winfo_children():
+        for w in self.center.winfo_children():
             w.destroy()
         ctk.CTkLabel(
-            self.right,
+            self.center,
             text="⊟\n\nЗагрузите фото спуска\nи нажмите Распознать",
             font=("JetBrains Mono", 14), text_color=("gray40","gray60"), justify="center"
         ).place(relx=0.5, rely=0.5, anchor="center")
@@ -311,6 +581,13 @@ class ImpositionPage(ctk.CTkFrame):
         )
         self.btn_analyze.configure(state="normal")
         self._status_lbl.configure(text="Фото загружено")
+
+    def _on_photo_drop(self, event):
+        raw = event.data
+        # tkinterdnd2 передаёт путь в фигурных скобках, если есть пробелы
+        path = raw.strip("{}").split("} {")[0] if raw else ""
+        if path and os.path.isfile(path):
+            self._load_photo(path)
 
     # ── ANALYZE ───────────────────────────────────────────────────
     def _analyze(self):
@@ -395,7 +672,7 @@ class ImpositionPage(ctk.CTkFrame):
             raw = resp.json()["content"][0]["text"]
 
         raw = raw.strip().replace("```json", "").replace("```", "").strip()
-        m = __import__("re").search(r"\{[\s\S]*\}", raw)
+        m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
             raise ValueError("JSON не найден в ответе модели")
         return json.loads(m.group(0))
@@ -417,10 +694,10 @@ class ImpositionPage(ctk.CTkFrame):
 
     # ── GRID RENDER ───────────────────────────────────────────────
     def _render_grid(self):
-        for w in self.right.winfo_children():
+        for w in self.center.winfo_children():
             w.destroy()
 
-        scroll = ctk.CTkScrollableFrame(self.right, fg_color="transparent")
+        scroll = ctk.CTkScrollableFrame(self.center, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=20, pady=20)
 
         for si, sheet in enumerate(self._sheets):
