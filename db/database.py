@@ -63,6 +63,7 @@ def _migrate_extra_columns():
         ("printery_order", "paper_cover",     "VARCHAR(64)"),
         ("printery_order", "paper_insert",    "VARCHAR(64)"),
         ("printery_order", "lak",             "VARCHAR(32)"),
+        ("printery_order", "spine_thickness",  "VARCHAR(16)"),
         ("printery_order", "customer",        "VARCHAR(80)"),
         ("printery_order", "spec_path",       "VARCHAR(256)"),
     ]

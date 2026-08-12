@@ -444,6 +444,13 @@ def _parse(text: str) -> dict:
     raw_binding = m.group(1).strip() if m else ""
     d["binding"] = normalize_binding_label(raw_binding) if raw_binding else None
 
+    # ── Толщина корешка ──────────────────────────────────────────
+    # Та же строка, что и "Скрепление" — значение (если есть) идёт
+    # сразу после метки "Толщина корешка".
+    m = re.search(r"толщина\s+корешка[^\S\n]*(.+?)(?=\n|$)", text, re.I)
+    spine = m.group(1).strip() if m else ""
+    d["spine_thickness"] = spine[:16] if spine else None
+
     # ── Ламинат ──────────────────────────────────────────────────
     m = re.search(r"ламинат\s+(?!двух)([^\n]+)", text, re.I)
     if m:

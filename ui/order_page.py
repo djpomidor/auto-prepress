@@ -250,6 +250,7 @@ class OrderPage(ctk.CTkFrame):
         self.v_paper_cover  = tk.StringVar()
         self.v_paper_insert = tk.StringVar()
         self.v_lak          = tk.StringVar()
+        self.v_spine        = tk.StringVar()
         self.v_delivery = tk.StringVar()
         self.v_submit   = tk.StringVar()
         self.v_due      = tk.StringVar()
@@ -391,9 +392,13 @@ class OrderPage(ctk.CTkFrame):
         self._preview_canvas.bind("<MouseWheel>", self._on_preview_wheel)        # Windows/macOS
         self._preview_canvas.bind("<Button-4>", lambda e: self._zoom_step(1))    # Linux — вверх
         self._preview_canvas.bind("<Button-5>", lambda e: self._zoom_step(-1))   # Linux — вниз
-        # Перетаскивание (панорамирование) зажатой левой кнопкой мыши
-        self._preview_canvas.bind("<ButtonPress-1>", lambda e: self._preview_canvas.scan_mark(e.x, e.y))
-        self._preview_canvas.bind("<B1-Motion>", lambda e: self._preview_canvas.scan_dragto(e.x, e.y, gain=1))
+        # Клик по пустому превью — выбор файла; если картинка уже
+        # загружена — то же самое нажатие панорамирует (двигает) её.
+        self._preview_canvas.bind("<ButtonPress-1>", self._on_preview_click)
+        self._preview_canvas.bind("<B1-Motion>", self._on_preview_drag)
+
+        # Drag-and-drop файла спецификации — прямо на превью
+        self._setup_dnd()
 
         # ── Полоса несовпадений (формат / кол-во полос) ──────────
         self._mismatch_bar = ctk.CTkFrame(parent, fg_color=WARNING, corner_radius=0, height=0)
@@ -431,6 +436,18 @@ class OrderPage(ctk.CTkFrame):
         self._preview_zoom = 1.0
         self._render_preview()
 
+    def _on_preview_click(self, event):
+        """Клик по превью: если картинки ещё нет — открываем диалог
+        выбора файла; если уже загружена — начинаем панорамирование."""
+        if self._preview_pil_image is None:
+            self._pick_spec_file()
+        else:
+            self._preview_canvas.scan_mark(event.x, event.y)
+
+    def _on_preview_drag(self, event):
+        if self._preview_pil_image is not None:
+            self._preview_canvas.scan_dragto(event.x, event.y, gain=1)
+
     def _render_preview(self):
         """Перерисовывает превью на холсте с учётом текущего зума."""
         if not hasattr(self, "_preview_canvas"):
@@ -443,8 +460,9 @@ class OrderPage(ctk.CTkFrame):
             canvas.delete("all")
             canvas.create_text(
                 cw // 2, ch // 2,
-                text="Спецификация ещё не загружена.\nПеретащите PDF/JPG в левую панель.",
-                fill=TEXT3, font=("JetBrains Mono", 12), justify="center",
+                text="📄\n\nПеретащите PDF или JPG спецификации сюда\n"
+                     "или нажмите для выбора файла",
+                fill=TEXT3, font=("JetBrains Mono", 20), justify="center",
             )
             canvas.configure(scrollregion=(0, 0, cw, ch))
             if hasattr(self, "_zoom_lbl"):
@@ -553,7 +571,7 @@ class OrderPage(ctk.CTkFrame):
             self.v_pages_block, self.v_pages_cover, self.v_pages_insert,
             self.v_color_block, self.v_color_cover, self.v_color_insert,
             self.v_paper_block, self.v_paper_cover, self.v_paper_insert,
-            self.v_lak, self.v_delivery, self.v_submit, self.v_due,
+            self.v_lak, self.v_spine, self.v_delivery, self.v_submit, self.v_due,
         ):
             var.set("")
 
@@ -594,28 +612,11 @@ class OrderPage(ctk.CTkFrame):
 
         _label(sec, "СПЕЦИФИКАЦИЯ ЗАКАЗА").pack(anchor="w", pady=(0, 6))
 
-        self.drop_zone = ctk.CTkFrame(
-            sec, fg_color=("gray85","gray20"), corner_radius=6,
-            border_width=1,  height=90
-        )
-        self.drop_zone.pack(fill="x")
-        self.drop_zone.pack_propagate(False)
-
-        self.drop_lbl = ctk.CTkLabel(
-            self.drop_zone,
-            text="Перетащите PDF или JPG спецификации сюда\n"
-                 "или нажмите для выбора файла",
-            font=("JetBrains Mono", 11),
-            text_color=("gray40","gray60"), justify="center"
-        )
-        self.drop_lbl.place(relx=0.5, rely=0.5, anchor="center")
-
-        # Кнопка выбора файла
-        self.drop_zone.bind("<Button-1>", lambda _: self._pick_spec_file())
-        self.drop_lbl.bind("<Button-1>", lambda _: self._pick_spec_file())
-
-        # Drag-and-drop через tkinterdnd2
-        self._setup_dnd()
+        # Сама подсказка "Перетащите PDF/JPG сюда..." и сам drag-and-drop
+        # теперь живут в окне ПРЕВЬЮ СПЕЦИФИКАЦИИ (центральная панель,
+        # см. _build_preview_panel) — там их и крупнее видно, и место
+        # само по себе куда больше подходит под drop-зону. Здесь, в
+        # сайдбаре, оставляем только компактную строку статуса OCR.
 
         # Прогресс OCR
         self._ocr_progress = ctk.CTkProgressBar(
@@ -624,9 +625,10 @@ class OrderPage(ctk.CTkFrame):
         )
 
         self._ocr_status = ctk.CTkLabel(
-            sec, text="", font=("JetBrains Mono", 10), text_color=TEXT3
+            sec, text="Перетащите или кликните превью спецификации,\nчтобы выбрать файл",
+            font=("JetBrains Mono", 10), text_color=TEXT3, justify="left", anchor="w",
         )
-        self._ocr_status.pack(anchor="w", pady=(4, 0))
+        self._ocr_status.pack(anchor="w", pady=(4, 0), fill="x")
 
     # ── FORM ──────────────────────────────────────────────────────
     def _build_form(self, parent):
@@ -654,6 +656,7 @@ class OrderPage(ctk.CTkFrame):
             ("Объём вкл.",             self.v_pages_insert, "кол-во полос"),
             ("Красочность вкл.",       self.v_color_insert, "напр. 4+4"),
             ("Лак",                    self.v_lak,          "если есть"),
+            ("Толщина корешка",        self.v_spine,        "если есть"),
         ]
 
         for i, (label, var, hint) in enumerate(fields):
@@ -849,6 +852,7 @@ class OrderPage(ctk.CTkFrame):
         self.v_paper_cover.set(o.paper_cover or "")
         self.v_paper_insert.set(o.paper_insert or "")
         self.v_lak.set(o.lak or "")
+        self.v_spine.set(o.spine_thickness or "")
 
         self.txt_tech_notes.delete("1.0", "end")
         self.txt_tech_notes.insert("1.0", o.tech_notes or "")
@@ -926,12 +930,11 @@ class OrderPage(ctk.CTkFrame):
 
 
     def _setup_dnd(self):
-        """Настройка drag-and-drop если tkinterdnd2 доступен."""
+        """Настройка drag-and-drop (если tkinterdnd2 доступен) —
+        целевая зона теперь окно ПРЕВЬЮ СПЕЦИФИКАЦИИ."""
         try:
-            self.drop_zone.drop_target_register("DND_Files")
-            self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)
-            self.drop_lbl.drop_target_register("DND_Files")
-            self.drop_lbl.dnd_bind("<<Drop>>", self._on_drop)
+            self._preview_canvas.drop_target_register("DND_Files")
+            self._preview_canvas.dnd_bind("<<Drop>>", self._on_drop)
         except Exception:
             pass  # tkinterdnd2 не установлен — работаем только через кнопку
 
@@ -995,13 +998,12 @@ class OrderPage(ctk.CTkFrame):
         # только потом распознаём.
         staged_path = self._stage_spec_file(path)
 
-        self.drop_lbl.configure(
+        self._ocr_status.configure(
             text=f"📄  {os.path.basename(staged_path)}\nРаспознаю...",
             text_color=WARNING
         )
         self._ocr_progress.pack(fill="x", padx=0, pady=(4, 0))
         self._ocr_progress.start()
-        self._ocr_status.configure(text="OCR в процессе...")
 
         # Превью в центральной панели (в фоне — pdf2image может быть медленным)
         threading.Thread(
@@ -1050,6 +1052,7 @@ class OrderPage(ctk.CTkFrame):
         if data.get("paper_cover"):  self.v_paper_cover.set(data["paper_cover"])
         if data.get("paper_insert"): self.v_paper_insert.set(data["paper_insert"])
         if data.get("lak"):          self.v_lak.set(data["lak"])
+        if data.get("spine_thickness"): self.v_spine.set(data["spine_thickness"])
         if data.get("tech_notes"):
             self.txt_tech_notes.delete("1.0", "end")
             self.txt_tech_notes.insert("1.0", data["tech_notes"])
@@ -1057,16 +1060,15 @@ class OrderPage(ctk.CTkFrame):
         if data.get("delivery_date"): self.v_delivery.set(data["delivery_date"])
         if data.get("submit_date"): self.v_submit.set(data["submit_date"])
 
-        self.drop_lbl.configure(
-            text=f"✓  {os.path.basename(path)}\nРаспознано. Проверьте данные.",
+        self._ocr_status.configure(
+            text=f"✓  {os.path.basename(path)} — распознано. Проверьте данные.",
             text_color=ACCENT
         )
-        self._ocr_status.configure(text=f"Источник: {path}")
 
     def _ocr_error(self, msg: str):
         self._ocr_progress.stop()
         self._ocr_progress.pack_forget()
-        self.drop_lbl.configure(
+        self._ocr_status.configure(
             text=f"✗  Ошибка OCR: {msg}", text_color=DANGER
         )
 
@@ -1140,6 +1142,7 @@ class OrderPage(ctk.CTkFrame):
             o.paper_cover  = self.v_paper_cover.get().strip() or None
             o.paper_insert = self.v_paper_insert.get().strip() or None
             o.lak          = self.v_lak.get().strip() or None
+            o.spine_thickness = self.v_spine.get().strip() or None
             o.tech_notes     = self.txt_tech_notes.get("1.0", "end").strip() or None
 
             session.commit()
@@ -1238,6 +1241,7 @@ class OrderPage(ctk.CTkFrame):
                 ("paper_cover",  o.paper_cover or ""),
                 ("paper_insert", o.paper_insert or ""),
                 ("lak",          o.lak or ""),
+                ("spine_thickness", o.spine_thickness or ""),
                 ("tech_notes",     o.tech_notes or ""),
             ]:
                 el = ET.SubElement(root_el, tag)
