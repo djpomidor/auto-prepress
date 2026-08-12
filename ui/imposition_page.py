@@ -14,6 +14,7 @@ import subprocess
 import config
 from db.database import get_session
 from db.models import Order
+from binding_types import binding_code_to_label
 
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
@@ -95,7 +96,7 @@ def _scan_preps_templates(order) -> list:
 
     dirs = config.CFG.get("preps_templates", [])
     trim_pair = {int(order.width), int(order.height)}
-    binding = (order.binding or "").strip()
+    binding = binding_code_to_label(order.binding) if order.binding else ""
 
     results = []
     seen_paths = set()
@@ -435,7 +436,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         o = self.order
         fmt = f"{o.width}×{o.height} мм" if o.width and o.height else "формат не указан"
-        binding = o.binding or "скрепление не указано"
+        binding = binding_code_to_label(o.binding) if o.binding else "скрепление не указано"
         self._templates_criteria_lbl.configure(
             text=f"Заказ №{o.number:04d}\nФормат: {fmt}\nСкрепление: {binding}"
         )

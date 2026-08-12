@@ -7,6 +7,7 @@ import tkinter as tk
 from datetime import datetime
 from db.database import get_session
 from db.models import Order
+from binding_types import binding_code_to_label
 
 
 class OrdersPage(ctk.CTkFrame):
@@ -152,7 +153,7 @@ class OrdersPage(ctk.CTkFrame):
         elif self._sort_col == "format":
             orders.sort(key=lambda o: (o.width or 0, o.height or 0), reverse=rev)
         elif self._sort_col == "binding":
-            orders.sort(key=lambda o: (o.binding or "").lower(), reverse=rev)
+            orders.sort(key=lambda o: binding_code_to_label(o.binding).lower(), reverse=rev)
         elif self._sort_col == "created":
             orders.sort(key=lambda o: o.created or datetime.min, reverse=rev)
         elif self._sort_col == "status":
@@ -174,7 +175,7 @@ class OrdersPage(ctk.CTkFrame):
                     o.name or "",
                     o.description or "—",
                     fmt,
-                    o.binding or "—",
+                    binding_code_to_label(o.binding) or "—",
                     "⬤  ВКЛ" if o.monitoring else "○  ВЫКЛ",
                     created,
                 ),

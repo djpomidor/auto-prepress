@@ -430,22 +430,19 @@ def _parse(text: str) -> dict:
     d["color_insert"] = _norm_color(m.group(1)) if m else None
 
     # ── Скрепление ───────────────────────────────────────────────
-    binding_map = [
-        (r"термо\s*кле[йй]|кбс",  "КБС"),
-        (r"скреп",                  "СКР"),
-        (r"ши[тт]ь|шитьё|швп",     "ШВП"),
-        (r"евро",                   "ЕВР"),
-    ]
-    d["binding"] = None
-    for pattern, val in binding_map:
-        if re.search(r"скрепление\s+" + pattern, text, re.I):
-            d["binding"] = val
-            break
-    if not d["binding"]:
-        for pattern, val in binding_map:
-            if re.search(pattern, text, re.I):
-                d["binding"] = val
-                break
+    # Реальная строка формы: "Скрепление скрепка Толщина корешка"
+    # (значение "Толщина корешка" на этой же строке — обрезаем перед
+    # ним). Дальше приводим к одному из 5 канонических вариантов
+    # ("скрепка", "термоклей", "твердый переплет", "резка в формат",
+    # "на пружину") через binding_types.normalize_binding_label —
+    # именно так текст и должен отображаться в интерфейсе.
+    from binding_types import normalize_binding_label
+    m = re.search(
+        r"скрепление[^\S\n]*(.+?)(?=[^\S\n]+толщина\s+корешка|\n|$)",
+        text, re.I
+    )
+    raw_binding = m.group(1).strip() if m else ""
+    d["binding"] = normalize_binding_label(raw_binding) if raw_binding else None
 
     # ── Ламинат ──────────────────────────────────────────────────
     m = re.search(r"ламинат\s+(?!двух)([^\n]+)", text, re.I)

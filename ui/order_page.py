@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox
 from datetime import datetime
 from db.database import get_session
 from db.models import Order
+from binding_types import binding_to_code, binding_code_to_label
 import config
 
 # Куда сохраняется JPG превью распознанной спецификации ДО того, как
@@ -833,7 +834,7 @@ class OrderPage(ctk.CTkFrame):
         self.v_customer.set(o.customer or "")
         self.v_description.set(o.description or "")
         self.v_circ.set(str(o.circulation) if o.circulation else "")
-        self.v_binding.set(o.binding or "")
+        self.v_binding.set(binding_code_to_label(o.binding) if o.binding else "")
         if o.width and o.height:
             self.v_format.set(f"{o.width}x{o.height}")
         else:
@@ -1105,7 +1106,7 @@ class OrderPage(ctk.CTkFrame):
             o.name          = name
             o.customer      = self.v_customer.get().strip() or None
             o.description   = self.v_description.get().strip() or None
-            o.binding       = self.v_binding.get().strip()
+            o.binding       = binding_to_code(self.v_binding.get().strip())
             o.created       = o.created or datetime.now()
             o.delivery_date = parse_date(self.v_delivery.get())
             o.submiting_files = parse_date(self.v_submit.get())
@@ -1223,7 +1224,7 @@ class OrderPage(ctk.CTkFrame):
                 ("name",   o.name),
                 ("customer", o.customer or ""),
                 ("description", o.description or ""),
-                ("binding", o.binding),
+                ("binding", binding_code_to_label(o.binding) if o.binding else ""),
                 ("width",  str(o.width or "")),
                 ("height", str(o.height or "")),
                 ("circulation", str(o.circulation or "")),
