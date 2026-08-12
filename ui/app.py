@@ -17,7 +17,7 @@ class App(ctk.CTk):
         super().__init__()
         self.cfg = config.CFG
 
-        self.title("ImpoFlow")
+        self.title("Prepresser")
         w, h = self.cfg["window_width"], self.cfg["window_height"]
         self.geometry(f"{w}x{h}")
         self.minsize(1100, 700)
@@ -51,12 +51,12 @@ class App(ctk.CTk):
         header.pack_propagate(False)
 
         ctk.CTkLabel(
-            header, text="Impo",
+            header, text="pre",
             font=("JetBrains Mono", 18, "bold"),
             text_color=("#2d7a00", "#c8f135"),
         ).pack(side="left", padx=(20, 0))
         ctk.CTkLabel(
-            header, text="Flow",
+            header, text="presser",
             font=("JetBrains Mono", 18),
         ).pack(side="left")
         ctk.CTkLabel(
