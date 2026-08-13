@@ -7,7 +7,7 @@ from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Float,
     ForeignKey, Table, Text, create_engine
 )
-from sqlalchemy.orm import declarative_base, relationship, Session
+from sqlalchemy.orm import declarative_base, relationship, backref, Session
 
 Base = declarative_base()
 
@@ -139,6 +139,39 @@ class Part(Base):
 
     order = relationship("Order", back_populates="parts")
     paper = relationship("Paper", back_populates="parts")
+
+
+class Imposition(Base):
+    """
+    Спуск полос для заказа — сохраняется отдельно от printery_order,
+    чтобы можно было вернуться и отредактировать позже. Одна запись
+    на заказ (order_id уникален).
+    """
+    __tablename__ = "imposition"
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    order_id    = Column(Integer, ForeignKey("printery_order.id"), nullable=False, unique=True)
+
+    # Путь к фото спуска на диске P: (копия в корне папки заказа,
+    # имя файла — "<номер>_<название>_spusk.<расширение>")
+    photo_path  = Column(String(256), nullable=True)
+
+    # Параметры сетки, с которыми распознавался/редактировался спуск
+    rows        = Column(Integer, nullable=True)
+    cols        = Column(Integer, nullable=True)
+    two_sided   = Column(Boolean, default=True)
+
+    # Результат распознавания/редактирования — список листов с
+    # ячейками (номера страниц, поворот, уверенность), в JSON —
+    # тот же формат, что строит ImpositionPage._collect_sheets()
+    sheets_json = Column(Text, nullable=True)
+
+    created     = Column(DateTime, nullable=False, default=datetime.now)
+    updated     = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+    order = relationship("Order", backref=backref("imposition", uselist=False))
+
+    def __repr__(self):
+        return f"<Imposition order_id={self.order_id}>"
 
 
 class PrintSchedule(Base):

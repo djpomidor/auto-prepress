@@ -3,6 +3,7 @@
 SQLite (локально, общий файл с Printery) или PostgreSQL (VPS).
 """
 import os
+from datetime import datetime
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from db.models import Base
@@ -90,5 +91,43 @@ def next_order_number() -> int:
     try:
         max_num = session.query(func.max(Order.number)).scalar()
         return (max_num or 0) + 1
+    finally:
+        session.close()
+
+
+def get_imposition(order_id: int):
+    """Возвращает запись спуска полос для заказа (или None)."""
+    from db.models import Imposition
+    if not order_id:
+        return None
+    session = get_session()
+    try:
+        return session.query(Imposition).filter_by(order_id=order_id).first()
+    finally:
+        session.close()
+
+
+def save_imposition(order_id: int, **fields):
+    """
+    Создаёт или обновляет запись спуска полос для заказа.
+    Принимает любые поля модели Imposition как kwargs, напр.:
+        save_imposition(order_id, photo_path=..., rows=4, cols=4,
+                         two_sided=True, sheets_json=json.dumps(sheets))
+    """
+    from db.models import Imposition
+    if not order_id:
+        return None
+    session = get_session()
+    try:
+        imp = session.query(Imposition).filter_by(order_id=order_id).first()
+        if not imp:
+            imp = Imposition(order_id=order_id)
+            session.add(imp)
+        for key, value in fields.items():
+            setattr(imp, key, value)
+        imp.updated = datetime.now()
+        session.commit()
+        session.refresh(imp)
+        return imp
     finally:
         session.close()

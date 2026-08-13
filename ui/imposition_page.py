@@ -10,11 +10,16 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import config
-from db.database import get_session
+from db.database import get_session, get_imposition, save_imposition
 from db.models import Order
 from binding_types import binding_code_to_label
+
+# Масштаб превью фото спуска по умолчанию — «вписать в окно»
+# (множитель поверх масштаба fit; см. _render_preview)
+_DEFAULT_PREVIEW_ZOOM = 1.0
 
 DARK_BG  = "#0f0f0f"
 DARK_SF  = "#1a1a1a"
@@ -65,22 +70,47 @@ def _norm_token(text: str) -> str:
     return "".join(out)
 
 
-def _binding_matches(order_binding: str, template_binding: str) -> bool:
-    """Сравнивает скрепление заказа (по-русски, напр. "скрепка") с
-    токеном из имени файла шаблона (обычно транслит, напр. "Skrepka").
-    Точной единой конвенции именования может не быть на 100% —
-    поэтому сравниваем транслитерированные строки как
-    подстроку/префикс друг друга, а не только на точное совпадение.
-    """
-    a = _norm_token(order_binding)
+# Соответствие КОДА скрепления заказа (как он хранится в БД —
+# printery_order.binding, см. binding_types.py: SKR/KBS/HARD/SHT/SHK/
+# REZ/PRU/FALC) токенам скрепления в именах файлов шаблонов Preps. У
+# одного типа скрепления может быть несколько вариантов написания
+# токена в имени файла (напр. и "shitie", и "nitki" — шитьё/твёрдый
+# переплёт, это один и тот же процесс/шаблон).
+_BINDING_CODE_TEMPLATE_TOKENS = {
+    "SHT":  {"shitie", "nitki"},            # шитьё
+    "HARD": {"shitie", "nitki"},            # твердый переплет — те же шаблоны, что и шитьё
+    "SHK":  {"shitie", "nitki", "tkley"},   # шитье+термоклей — оба процесса
+    "KBS":  {"tkley"},                       # термоклей
+    "SKR":  {"skrepka"},                     # скрепка
+}
+
+
+def _binding_matches(order_binding_code: str, order_binding_label: str, template_binding: str) -> bool:
+    """Сравнивает скрепление заказа с токеном скрепления из имени
+    файла шаблона Preps (обычно транслит, напр. "Skrepka").
+
+    В первую очередь сравниваем по КОДУ скрепления заказа (точный,
+    берётся из БД — см. _BINDING_CODE_TEMPLATE_TOKENS) — это надёжный
+    способ, не зависящий от формулировок. Если код неизвестен/не
+    входит в таблицу (напр. "резка в формат", "на пружину",
+    "фальцовка" — под них шаблонов спуска нет) — используем текстовую
+    метку скрепления как запасной вариант (нечёткое сравнение
+    транслитерированных строк по подстроке/префиксу)."""
     b = _norm_token(template_binding)
-    if not a or not b:
+    if not b:
+        return False
+
+    code = (order_binding_code or "").strip().upper()
+    if code in _BINDING_CODE_TEMPLATE_TOKENS:
+        return b in _BINDING_CODE_TEMPLATE_TOKENS[code]
+
+    a = _norm_token(order_binding_label)
+    if not a:
         return False
     if a == b:
         return True
-    # частичное совпадение по началу слова (напр. "termokley" vs
-    # "termokleevoe") — берём первые 5 символов как достаточно
-    # уникальный признак типа скрепления
+    # частичное совпадение по началу слова (запасной вариант для
+    # кодов/меток, которых нет в таблице выше)
     prefix_len = min(5, len(a), len(b))
     return a[:prefix_len] == b[:prefix_len] or a in b or b in a
 
@@ -96,7 +126,8 @@ def _scan_preps_templates(order) -> list:
 
     dirs = config.CFG.get("preps_templates", [])
     trim_pair = {int(order.width), int(order.height)}
-    binding = binding_code_to_label(order.binding) if order.binding else ""
+    binding_code  = order.binding or ""
+    binding_label = binding_code_to_label(order.binding) if order.binding else ""
 
     results = []
     seen_paths = set()
@@ -119,7 +150,7 @@ def _scan_preps_templates(order) -> list:
                 continue
             if {tw, th} != trim_pair:
                 continue
-            if binding and not _binding_matches(binding, m.group("binding")):
+            if binding_code and not _binding_matches(binding_code, binding_label, m.group("binding")):
                 continue
 
             path = os.path.join(d, fname)
@@ -150,21 +181,33 @@ class ImpositionPage(ctk.CTkFrame):
         self._img_path = None
         self._sheets = []
 
+        # Превью фото спуска (в центральной панели, с зумом)
+        self._preview_pil_image = None
+        self._preview_tk_image  = None
+        self._preview_zoom      = _DEFAULT_PREVIEW_ZOOM
+
+        # Сохранённая ранее (в БД) запись спуска полос для этого
+        # заказа, если она есть — подхватываем фото и сетку.
+        self.imposition = None
+
         if order_id:
             session = get_session()
             try:
                 self.order = session.get(Order, order_id)
             finally:
                 session.close()
+            self.imposition = get_imposition(order_id)
 
         self._build()
         self._refresh_templates()
+        self._load_existing_imposition()
 
     # ── LAYOUT ────────────────────────────────────────────────────
     def _build(self):
         # Три панели, как на странице заказа: левая (контролы) —
-        # центр (сетка спуска) — правая (шаблоны Preps). Границы
-        # можно перетаскивать.
+        # центр (фото/сетка спуска) — правая (шаблоны Preps). Границы
+        # можно перетаскивать. Левая панель по умолчанию СКРЫТА —
+        # открывается кнопкой в верхней панели инструментов.
         self.pack_propagate(False)
         try:
             win_w = self.app.cfg.get("window_width", 1400)
@@ -172,9 +215,24 @@ class ImpositionPage(ctk.CTkFrame):
             win_w = 1400
         left_default_w  = 320
         right_default_w = max(320, int(win_w * 0.25))
+        self._left_default_w = left_default_w
 
         is_dark = ctk.get_appearance_mode().lower() == "dark"
         sash_bg = "#242424" if is_dark else "#d5d5d5"
+
+        # ── Верхняя панель инструментов — переключатель сайдбара ──
+        toolbar = ctk.CTkFrame(self, fg_color=("gray85","gray20"), height=32, corner_radius=0)
+        toolbar.pack(fill="x", side="top")
+        toolbar.pack_propagate(False)
+
+        self._sidebar_btn = ctk.CTkButton(
+            toolbar, text="☰  Показать панель", width=180, height=24,
+            font=("JetBrains Mono", 10),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            border_width=1,
+            command=self._toggle_sidebar,
+        )
+        self._sidebar_btn.pack(side="left", padx=10, pady=4)
 
         self._paned = tk.PanedWindow(
             self, orient="horizontal", sashwidth=6, sashrelief="flat",
@@ -185,11 +243,14 @@ class ImpositionPage(ctk.CTkFrame):
         # ── Левая панель — контролы ──────────────────────────────
         # ВАЖНО: CTkScrollableFrame нельзя добавлять в PanedWindow
         # напрямую (сложная внутренняя структура canvas/frame) —
-        # оборачиваем в обычный CTkFrame-контейнер.
+        # оборачиваем в обычный CTkFrame-контейнер. Панель по
+        # умолчанию НЕ добавляется в paned window (скрыта) — см.
+        # _toggle_sidebar.
         left_container = ctk.CTkFrame(
             self._paned, fg_color=("gray90","gray17"), corner_radius=0,
         )
-        self._paned.add(left_container, width=left_default_w, minsize=280, stretch="never")
+        self._left_container = left_container
+        self._sidebar_visible = False
 
         left = ctk.CTkScrollableFrame(
             left_container, fg_color="transparent", corner_radius=0,
@@ -204,35 +265,18 @@ class ImpositionPage(ctk.CTkFrame):
             )
 
         # ── Фото ──────────────────────────────────────────────────
+        # Сама загрузка/просмотр фото спуска (с зумом) теперь живёт
+        # в центральной панели — как у спецификации на странице
+        # заказа. Здесь, в сайдбаре, оставляем только компактный
+        # статус.
         lbl("ФОТО СПУСКА").pack(anchor="w", padx=16, pady=(16, 6))
-
-        self.photo_zone = ctk.CTkFrame(
-            left, fg_color=("gray85","gray20"), corner_radius=6,
-            border_width=1,  height=80
+        self._photo_status_lbl = ctk.CTkLabel(
+            left,
+            text="Перетащите или кликните превью,\nчтобы выбрать фото",
+            font=("JetBrains Mono", 10), text_color=TEXT3,
+            justify="left", anchor="w", wraplength=270,
         )
-        self.photo_zone.pack(fill="x", padx=16)
-        self.photo_zone.pack_propagate(False)
-        self._drop_lbl = ctk.CTkLabel(
-            self.photo_zone,
-            text="Нажмите или перетащите JPG",
-            font=("JetBrains Mono", 11), text_color=TEXT3
-        )
-        self._drop_lbl.place(relx=0.5, rely=0.5, anchor="center")
-        self.photo_zone.bind("<Button-1>", lambda _: self._pick_photo())
-        self._drop_lbl.bind("<Button-1>", lambda _: self._pick_photo())
-
-        # Drag-and-drop для фото спуска
-        try:
-            self.photo_zone.drop_target_register("DND_Files")
-            self.photo_zone.dnd_bind("<<Drop>>", self._on_photo_drop)
-            self._drop_lbl.drop_target_register("DND_Files")
-            self._drop_lbl.dnd_bind("<<Drop>>", self._on_photo_drop)
-        except Exception:
-            pass
-
-        # Превью фото
-        self.photo_preview = ctk.CTkLabel(left, text="", image=None)
-        self.photo_preview.pack(padx=16, pady=(6, 0))
+        self._photo_status_lbl.pack(anchor="w", padx=16, fill="x")
 
         ctk.CTkFrame(left, fg_color=("gray80","gray25"), height=1).pack(fill="x", pady=10)
 
@@ -242,9 +286,9 @@ class ImpositionPage(ctk.CTkFrame):
         grid_f.pack(fill="x", padx=16)
         grid_f.columnconfigure(1, weight=1)
 
-        self.v_rows = tk.StringVar(value="4")
-        self.v_cols = tk.StringVar(value="4")
-        self.v_two  = tk.BooleanVar(value=True)
+        self.v_rows = tk.StringVar(value=str(self.imposition.rows) if self.imposition and self.imposition.rows else "4")
+        self.v_cols = tk.StringVar(value=str(self.imposition.cols) if self.imposition and self.imposition.cols else "4")
+        self.v_two  = tk.BooleanVar(value=self.imposition.two_sided if self.imposition and self.imposition.two_sided is not None else True)
 
         for row, (label, var) in enumerate([
             ("Рядов",   self.v_rows),
@@ -376,10 +420,18 @@ class ImpositionPage(ctk.CTkFrame):
                 command=cmd,
             ).pack(fill="x", padx=16, pady=2)
 
-        # ── Центральная панель — сетка спуска ────────────────────
-        self.center = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
-        self._paned.add(self.center, minsize=300, stretch="always")
-        self._build_empty_state()
+        ctk.CTkButton(
+            left, text="💾  Сохранить спуск",
+            font=("JetBrains Mono", 11, "bold"),
+            fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+            border_width=1, height=30,
+            command=self._save_imposition_to_db,
+        ).pack(fill="x", padx=16, pady=(8, 16))
+
+        # ── Центральная панель — фото / сетка спуска ─────────────
+        center = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
+        self._paned.add(center, minsize=300, stretch="always")
+        self._build_center(center)
 
         # ── Правая панель — шаблоны Preps ────────────────────────
         right_container = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
@@ -387,6 +439,212 @@ class ImpositionPage(ctk.CTkFrame):
         right_container.grid_columnconfigure(0, weight=1)
         self._paned.add(right_container, width=right_default_w, minsize=280, stretch="never")
         self._build_templates_panel(right_container)
+
+    # ── SIDEBAR TOGGLE ───────────────────────────────────────────
+    def _toggle_sidebar(self):
+        if self._sidebar_visible:
+            self._paned.forget(self._left_container)
+            self._sidebar_visible = False
+            self._sidebar_btn.configure(text="☰  Показать панель")
+        else:
+            first_pane = self._paned.panes()[0] if self._paned.panes() else None
+            if first_pane:
+                self._paned.add(
+                    self._left_container, width=self._left_default_w,
+                    minsize=280, stretch="never", before=first_pane,
+                )
+            else:
+                self._paned.add(
+                    self._left_container, width=self._left_default_w,
+                    minsize=280, stretch="never",
+                )
+            self._sidebar_visible = True
+            self._sidebar_btn.configure(text="☰  Скрыть панель")
+
+    # ── ЦЕНТРАЛЬНАЯ ПАНЕЛЬ (фото / сетка) ────────────────────────
+    def _build_center(self, parent):
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        # Верхняя мини-панель — переключатель "Фото / Сетка" + зум
+        nav = ctk.CTkFrame(parent, fg_color=("gray85","gray20"), height=36, corner_radius=0)
+        nav.grid(row=0, column=0, sticky="ew")
+        nav.grid_propagate(False)
+
+        self._view_seg = ctk.CTkSegmentedButton(
+            nav, values=["📷 Фото", "▦ Сетка"],
+            font=("JetBrains Mono", 10),
+            selected_color=ACCENT2, unselected_color=DARK_SF2,
+            command=self._on_view_change,
+        )
+        self._view_seg.set("📷 Фото")
+        self._view_seg.pack(side="left", padx=10, pady=4)
+
+        # Управление зумом (актуально только для вида "Фото")
+        self._zoom_box = ctk.CTkFrame(nav, fg_color="transparent")
+        self._zoom_box.pack(side="right", padx=10, pady=4)
+
+        ctk.CTkButton(
+            self._zoom_box, text="−", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_out,
+        ).pack(side="left", padx=2)
+
+        self._zoom_lbl = ctk.CTkLabel(
+            self._zoom_box, text="—", font=("JetBrains Mono", 10), width=42,
+        )
+        self._zoom_lbl.pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            self._zoom_box, text="+", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_in,
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            self._zoom_box, text="⤢ 100%", width=56, height=24, font=("JetBrains Mono", 10),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._zoom_reset,
+        ).pack(side="left", padx=(6, 0))
+
+        # Область содержимого — фото и сетка лежат друг на друге,
+        # переключение через tkraise() (см. _on_view_change)
+        content = ctk.CTkFrame(parent, fg_color="transparent")
+        content.grid(row=1, column=0, sticky="nsew")
+        content.grid_rowconfigure(0, weight=1)
+        content.grid_columnconfigure(0, weight=1)
+
+        self._photo_frame = ctk.CTkFrame(content, fg_color=("gray88","gray14"), corner_radius=0)
+        self._photo_frame.grid(row=0, column=0, sticky="nsew")
+        self._grid_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._grid_frame.grid(row=0, column=0, sticky="nsew")
+
+        self._build_photo_canvas(self._photo_frame)
+        self._build_empty_state()
+
+        self._view_mode = "photo"
+        self._photo_frame.tkraise()
+
+    def _on_view_change(self, value: str):
+        if value.startswith("📷"):
+            self._view_mode = "photo"
+            self._photo_frame.tkraise()
+            self._zoom_box.pack(side="right", padx=10, pady=4)
+        else:
+            self._view_mode = "grid"
+            self._grid_frame.tkraise()
+            self._zoom_box.pack_forget()
+
+    # ── ФОТО — превью с зумом (как на странице заказа) ──────────
+    def _build_photo_canvas(self, parent):
+        is_dark = ctk.get_appearance_mode().lower() == "dark"
+        canvas_bg = "#161616" if is_dark else "#dcdcdc"
+
+        self._preview_canvas = tk.Canvas(
+            parent, bg=canvas_bg, highlightthickness=0, bd=0,
+        )
+        self._preview_canvas.pack(fill="both", expand=True)
+
+        self._preview_canvas.bind("<Configure>", lambda e: self._render_preview())
+        # Зум колесом мыши
+        self._preview_canvas.bind("<MouseWheel>", self._on_preview_wheel)        # Windows/macOS
+        self._preview_canvas.bind("<Button-4>", lambda e: self._zoom_step(1))    # Linux — вверх
+        self._preview_canvas.bind("<Button-5>", lambda e: self._zoom_step(-1))   # Linux — вниз
+        # Клик по пустому превью — выбор файла; если фото уже
+        # загружено — то же нажатие панорамирует (двигает) его.
+        self._preview_canvas.bind("<ButtonPress-1>", self._on_preview_click)
+        self._preview_canvas.bind("<B1-Motion>", self._on_preview_drag)
+
+        # Drag-and-drop фото спуска — прямо на превью
+        try:
+            self._preview_canvas.drop_target_register("DND_Files")
+            self._preview_canvas.dnd_bind("<<Drop>>", self._on_photo_drop)
+        except Exception:
+            pass
+
+        self._render_preview()
+
+    # ── ZOOM ──────────────────────────────────────────────────────
+    def _on_preview_wheel(self, event):
+        direction = 1 if event.delta > 0 else -1
+        self._zoom_step(direction)
+
+    def _zoom_step(self, direction: int):
+        if not self._preview_pil_image:
+            return
+        factor = 1.15 if direction > 0 else (1 / 1.15)
+        self._preview_zoom = max(0.15, min(8.0, self._preview_zoom * factor))
+        self._render_preview()
+
+    def _zoom_in(self):
+        self._zoom_step(1)
+
+    def _zoom_out(self):
+        self._zoom_step(-1)
+
+    def _zoom_reset(self):
+        """Возврат к масштабу «вписать в окно»."""
+        self._preview_zoom = 1.0
+        self._render_preview()
+
+    def _on_preview_click(self, event):
+        """Клик по превью: если фото ещё нет — открываем диалог
+        выбора файла; если уже загружено — начинаем панорамирование."""
+        if self._preview_pil_image is None:
+            self._pick_photo()
+        else:
+            self._preview_canvas.scan_mark(event.x, event.y)
+
+    def _on_preview_drag(self, event):
+        if self._preview_pil_image is not None:
+            self._preview_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _render_preview(self):
+        """Перерисовывает превью фото спуска на холсте с учётом
+        текущего зума."""
+        if not hasattr(self, "_preview_canvas"):
+            return
+        canvas = self._preview_canvas
+        cw = max(1, canvas.winfo_width())
+        ch = max(1, canvas.winfo_height())
+
+        if not self._preview_pil_image:
+            canvas.delete("all")
+            canvas.create_text(
+                cw // 2, ch // 2,
+                text="📷\n\nПеретащите фото спуска сюда\nили нажмите для выбора файла",
+                fill=TEXT3, font=("JetBrains Mono", 20), justify="center",
+            )
+            canvas.configure(scrollregion=(0, 0, cw, ch))
+            if hasattr(self, "_zoom_lbl"):
+                self._zoom_lbl.configure(text="—")
+            return
+
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            return
+
+        img = self._preview_pil_image
+        iw, ih = img.size
+        fit_scale = min(cw / iw, ch / ih) if iw and ih else 1.0
+        fit_scale = max(fit_scale, 0.01)
+        scale = max(0.02, fit_scale * self._preview_zoom)
+
+        new_w = max(1, int(iw * scale))
+        new_h = max(1, int(ih * scale))
+        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        self._preview_tk_image = ImageTk.PhotoImage(resized)
+
+        canvas.delete("all")
+        x0 = max(0, (cw - new_w) // 2)
+        y0 = max(0, (ch - new_h) // 2)
+        canvas.create_image(x0, y0, anchor="nw", image=self._preview_tk_image)
+        region_w = max(cw, new_w)
+        region_h = max(ch, new_h)
+        canvas.configure(scrollregion=(0, 0, region_w, region_h))
+
+        self._zoom_lbl.configure(text=f"{int(self._preview_zoom * 100)}%")
 
     # ── ШАБЛОНЫ PREPS ────────────────────────────────────────────
     def _build_templates_panel(self, parent):
@@ -553,10 +811,10 @@ class ImpositionPage(ctk.CTkFrame):
 
     # ── PHOTO ─────────────────────────────────────────────────────
     def _build_empty_state(self):
-        for w in self.center.winfo_children():
+        for w in self._grid_frame.winfo_children():
             w.destroy()
         ctk.CTkLabel(
-            self.center,
+            self._grid_frame,
             text="⊟\n\nЗагрузите фото спуска\nи нажмите Распознать",
             font=("JetBrains Mono", 14), text_color=("gray40","gray60"), justify="center"
         ).place(relx=0.5, rely=0.5, anchor="center")
@@ -568,27 +826,131 @@ class ImpositionPage(ctk.CTkFrame):
         if path:
             self._load_photo(path)
 
-    def _load_photo(self, path: str):
+    def _spusk_dst_path(self, src_path: str) -> str:
+        """Путь, по которому фото спуска должно лежать в корне папки
+        заказа на диске P: — с припиской "_spusk" к имени заказа."""
+        if not self.order or not self.order.folder_path:
+            return None
+        ext = os.path.splitext(src_path)[1].lower() or ".jpg"
+        name = f"{self.order.folder_name}_spusk{ext}"
+        return os.path.join(self.order.folder_path, name)
+
+    def _load_photo(self, path: str, copy_to_disk: bool = True):
+        """Загружает фото спуска в превью. Если copy_to_disk — копирует
+        файл в корень папки заказа на диске P: (с припиской "_spusk")
+        и запоминает путь в БД, чтобы при следующем открытии страницы
+        подхватить фото автоматически."""
         from PIL import Image
-        self._img_path = path
-        img = Image.open(path)
-        img.thumbnail((270, 200))
-        # Используем CTkImage — правильный способ для CustomTkinter
-        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-        self.photo_preview.configure(image=ctk_img, text="")
-        self.photo_preview._ctk_image = ctk_img   # держим ссылку
-        self._drop_lbl.configure(
-            text=f"✓ {os.path.basename(path)}", text_color=ACCENT
+
+        saved_path = path
+        if copy_to_disk:
+            dst = self._spusk_dst_path(path)
+            if dst:
+                try:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    if os.path.abspath(dst) != os.path.abspath(path):
+                        shutil.copy2(path, dst)
+                    saved_path = dst
+                except Exception as e:
+                    messagebox.showwarning(
+                        "Спуск полос",
+                        f"Не удалось скопировать фото на диск P::\n{e}\n\n"
+                        f"Работаю с исходным файлом."
+                    )
+
+        self._img_path = saved_path
+
+        img = Image.open(saved_path)
+        img.load()
+        self._preview_pil_image = img
+        self._preview_zoom = _DEFAULT_PREVIEW_ZOOM
+        self._render_preview()
+        self._view_seg.set("📷 Фото")
+        self._on_view_change("📷 Фото")
+
+        self._photo_status_lbl.configure(
+            text=f"✓ {os.path.basename(saved_path)}", text_color=ACCENT
         )
         self.btn_analyze.configure(state="normal")
         self._status_lbl.configure(text="Фото загружено")
 
+        # Запоминаем путь к фото в БД (для последующих открытий
+        # страницы), только если файл реально лежит в папке заказа
+        if self.order and self.order.id and saved_path == self._spusk_dst_path(path):
+            save_imposition(self.order.id, photo_path=saved_path)
+
     def _on_photo_drop(self, event):
-        raw = event.data
-        # tkinterdnd2 передаёт путь в фигурных скобках, если есть пробелы
-        path = raw.strip("{}").split("} {")[0] if raw else ""
+        raw = (event.data or "").strip()
+        if raw.startswith("{"):
+            paths = re.findall(r"\{([^}]+)\}", raw)
+            if not paths:
+                paths = [raw.strip("{}")]
+        else:
+            paths = raw.split()
+        path = (paths[0] if paths else "").strip()
         if path and os.path.isfile(path):
             self._load_photo(path)
+
+    def _load_existing_imposition(self):
+        """При открытии страницы уже существующего заказа — подхватывает
+        сохранённое ранее фото спуска (с диска P:) и сетку из БД, если
+        они есть, без повторного копирования файла."""
+        if not self.imposition:
+            return
+
+        photo_path = self.imposition.photo_path
+        if photo_path and os.path.isfile(photo_path):
+            self._load_photo(photo_path, copy_to_disk=False)
+        elif self.order and self.order.folder_path and os.path.isdir(self.order.folder_path):
+            # Запись в БД есть, но путь не найден (файл могли
+            # переименовать/перенести) — ищем "*_spusk.*" в корне
+            # папки заказа как запасной вариант.
+            root = self.order.folder_path
+            candidates = [
+                f for f in os.listdir(root)
+                if "_spusk" in f.lower()
+                and f.lower().endswith((".jpg", ".jpeg", ".png"))
+            ]
+            if candidates:
+                candidates.sort(key=lambda f: os.path.getmtime(os.path.join(root, f)), reverse=True)
+                self._load_photo(os.path.join(root, candidates[0]), copy_to_disk=False)
+
+        if self.imposition.sheets_json:
+            try:
+                sheets = json.loads(self.imposition.sheets_json)
+            except Exception:
+                sheets = []
+            if sheets:
+                self._sheets = sheets
+                self._render_grid()
+                self._view_seg.set("▦ Сетка")
+                self._on_view_change("▦ Сетка")
+                self._status_lbl.configure(text="Загружен сохранённый спуск")
+
+    def _save_imposition_to_db(self):
+        """Сохраняет текущее состояние спуска (сетку/параметры/фото)
+        в БД для последующего редактирования."""
+        if not self.order or not self.order.id:
+            messagebox.showwarning("Спуск полос", "Заказ не найден — сохранение недоступно.")
+            return
+        sheets = self._collect_sheets() if self._sheets else []
+        try:
+            rows = int(self.v_rows.get() or 4)
+        except ValueError:
+            rows = None
+        try:
+            cols = int(self.v_cols.get() or 4)
+        except ValueError:
+            cols = None
+
+        save_imposition(
+            self.order.id,
+            photo_path=self._img_path,
+            rows=rows, cols=cols,
+            two_sided=self.v_two.get(),
+            sheets_json=json.dumps(sheets, ensure_ascii=False) if sheets else None,
+        )
+        self._status_lbl.configure(text="✓ Спуск сохранён", text_color=ACCENT)
 
     # ── ANALYZE ───────────────────────────────────────────────────
     def _analyze(self):
@@ -687,6 +1049,7 @@ class ImpositionPage(ctk.CTkFrame):
             text=f"Уверенность: {int(conf * 100)}%{issue_txt}"
         )
         self._render_grid()
+        self._save_imposition_to_db()
 
     def _on_error(self, msg: str):
         self._status_lbl.configure(
@@ -695,11 +1058,15 @@ class ImpositionPage(ctk.CTkFrame):
 
     # ── GRID RENDER ───────────────────────────────────────────────
     def _render_grid(self):
-        for w in self.center.winfo_children():
+        for w in self._grid_frame.winfo_children():
             w.destroy()
 
-        scroll = ctk.CTkScrollableFrame(self.center, fg_color="transparent")
+        scroll = ctk.CTkScrollableFrame(self._grid_frame, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=20, pady=20)
+
+        if hasattr(self, "_view_seg"):
+            self._view_seg.set("▦ Сетка")
+            self._on_view_change("▦ Сетка")
 
         for si, sheet in enumerate(self._sheets):
             # Заголовок листа
