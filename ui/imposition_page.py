@@ -135,45 +135,49 @@ def _scan_preps_templates(order) -> list:
     for d in dirs:
         if not d or not os.path.isdir(d):
             continue
+        # Рекурсивно обходим все вложенные подпапки — шаблоны могут
+        # быть разложены по годам/заказчикам/типам и т.п., а не
+        # только лежать прямо в корне указанной папки.
         try:
-            entries = os.listdir(d)
+            walker = os.walk(d)
         except Exception:
             continue
-        for fname in entries:
-            if not fname.lower().endswith(".tpl"):
-                continue
-            m = _TEMPLATE_RE.match(fname)
-            if not m:
-                continue
-            try:
-                tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
-            except ValueError:
-                continue
-            if {tw, th} != trim_pair:
-                continue
-            if binding_code and not _binding_matches(binding_code, binding_label, m.group("binding")):
-                continue
+        for root, _subdirs, files in walker:
+            for fname in files:
+                if not fname.lower().endswith(".tpl"):
+                    continue
+                m = _TEMPLATE_RE.match(fname)
+                if not m:
+                    continue
+                try:
+                    tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
+                except ValueError:
+                    continue
+                if {tw, th} != trim_pair:
+                    continue
+                if binding_code and not _binding_matches(binding_code, binding_label, m.group("binding")):
+                    continue
 
-            path = os.path.join(d, fname)
-            if path in seen_paths:
-                continue
-            seen_paths.add(path)
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                mtime = 0
-            results.append({
-                "fname": fname,
-                "path": path,
-                "source_dir": d,
-                "order_num": m.group("order"),
-                "name": m.group("name"),
-                "trim": f"{tw}x{th}",
-                "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
-                "binding": m.group("binding"),
-                "mtime": mtime,
-                "year": datetime.fromtimestamp(mtime).year if mtime else None,
-            })
+                path = os.path.join(root, fname)
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    mtime = 0
+                results.append({
+                    "fname": fname,
+                    "path": path,
+                    "source_dir": d,
+                    "order_num": m.group("order"),
+                    "name": m.group("name"),
+                    "trim": f"{tw}x{th}",
+                    "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
+                    "binding": m.group("binding"),
+                    "mtime": mtime,
+                    "year": datetime.fromtimestamp(mtime).year if mtime else None,
+                })
 
     # Сначала новые — по дате изменения файла шаблона (убывание)
     results.sort(key=lambda r: r["mtime"], reverse=True)
@@ -749,7 +753,7 @@ class ImpositionPage(ctk.CTkFrame):
 
             name_lbl = ctk.CTkLabel(
                 card, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
-                text_color=ACCENT2, anchor="w", justify="left", wraplength=270,
+                text_color=ACCENT, anchor="w", justify="left", wraplength=270,
                 cursor="hand2",
             )
             name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
