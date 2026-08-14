@@ -14,8 +14,8 @@ class OrdersPage(ctk.CTkFrame):
     def __init__(self, parent, app, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.app = app
-        self._sort_col = "number"
-        self._sort_asc = True
+        self._sort_col = "created"
+        self._sort_asc = False
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._reload())
         self._build()
@@ -96,7 +96,7 @@ class OrdersPage(ctk.CTkFrame):
 
         headers = {
             "number":      ("№",              70,  "center"),
-            "name":        ("Название",       260, "w"),
+            "name":        ("Название",       130, "w"),
             "description": ("Описание заказа",150, "w"),
             "format":      ("Формат",         100, "center"),
             "binding":     ("Скрепление",     130, "center"),
