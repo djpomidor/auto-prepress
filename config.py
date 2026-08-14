@@ -19,17 +19,22 @@ DEFAULTS = {
     "pg_dsn": "postgresql://user:pass@localhost/printery",
 
     # ── Пути ─────────────────────────────────────────────────────
-    "orders_root": r"P:\\",
+    # ВАЖНО: в raw-строке (префикс r"...") backslash НЕ схлопывается —
+    # r"P:\\" это два символа backslash, а не один. Пишем одинарный
+    # backslash как есть (r"P:\Preps"), а для UNC-путей — ровно два
+    # ведущих (r"\\SERVER\Share"), иначе Windows не распознает сетевой
+    # путь (лишние backslash в "\\\\SERVER" ломают разбор имени сервера).
+    "orders_root": "P:\\",
     "preps_templates": [
-        r"P:\\Preps\\Templates",
-        r"\\\\NAS-PREPRESS\\Archives\\!!!_Preps_Templates",
+        r"P:\Preps\Templates",
+        r"\\NAS-PREPRESS\Archives\!!!_Preps_Templates",
     ],
-    "pitstop_in":  r"D:\\Pitstop_\\out",
-    "pitstop_log": r"D:\\Pitstop_\\Log",
+    "pitstop_in":  r"D:\Pitstop_\out",
+    "pitstop_log": r"D:\Pitstop_\Log",
     # Куда PitStop Server кладёт ОРИГИНАЛЬНЫЙ файл + XML лог, когда
     # ошибок НЕ найдено (это отдельная папка от pitstop_log, куда
     # логи об ошибках не попадают вообще).
-    "pitstop_ok":  r"D:\\Pitstop_\\Ok",
+    "pitstop_ok":  r"D:\Pitstop_\Ok",
 
     # ── Просмотр PDF лога PitStop в Acrobat ─────────────────────────
     "acrobat_path": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",

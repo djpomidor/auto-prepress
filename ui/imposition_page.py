@@ -749,7 +749,7 @@ class ImpositionPage(ctk.CTkFrame):
 
             name_lbl = ctk.CTkLabel(
                 card, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
-                text_color=ACCENT, anchor="w", justify="left", wraplength=270,
+                text_color=ACCENT2, anchor="w", justify="left", wraplength=270,
                 cursor="hand2",
             )
             name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
