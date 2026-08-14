@@ -5,6 +5,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox
+from datetime import datetime
 import threading
 import base64
 import json
@@ -157,6 +158,10 @@ def _scan_preps_templates(order) -> list:
             if path in seen_paths:
                 continue
             seen_paths.add(path)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                mtime = 0
             results.append({
                 "fname": fname,
                 "path": path,
@@ -166,9 +171,12 @@ def _scan_preps_templates(order) -> list:
                 "trim": f"{tw}x{th}",
                 "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
                 "binding": m.group("binding"),
+                "mtime": mtime,
+                "year": datetime.fromtimestamp(mtime).year if mtime else None,
             })
 
-    results.sort(key=lambda r: r["fname"].lower())
+    # Сначала новые — по дате изменения файла шаблона (убывание)
+    results.sort(key=lambda r: r["mtime"], reverse=True)
     return results
 
 
@@ -658,7 +666,7 @@ class ImpositionPage(ctk.CTkFrame):
         hdr.grid_propagate(False)
         ctk.CTkLabel(
             hdr, text="ШАБЛОНЫ PREPS",
-            font=("JetBrains Mono", 12, "bold"), text_color=("gray40","gray60"),
+            font=("JetBrains Mono", 12, "bold"), text_color=("gray15","gray90"),
             anchor="w",
         ).pack(side="left", padx=16, pady=8)
         ctk.CTkButton(
@@ -670,7 +678,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._templates_criteria_lbl = ctk.CTkLabel(
             frame, text="", font=("JetBrains Mono", 10),
-            text_color=TEXT3, justify="left", anchor="w", wraplength=280,
+            text_color=("gray25","gray80"), justify="left", anchor="w", wraplength=280,
         )
         self._templates_criteria_lbl.grid(row=1, column=0, sticky="ew", padx=14, pady=(10, 4))
 
@@ -703,7 +711,7 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkLabel(
                 self.templates_list,
                 text="У заказа не указан обрезной формат —\nнечего сопоставлять с шаблонами.",
-                font=("JetBrains Mono", 11), text_color=TEXT3, justify="left",
+                font=("JetBrains Mono", 11), text_color=("gray25","gray80"), justify="left",
             ).pack(anchor="w", padx=12, pady=12)
             return
 
@@ -717,11 +725,24 @@ class ImpositionPage(ctk.CTkFrame):
                 msg += "\n\n⚠ Недоступны папки:\n" + "\n".join(missing)
             ctk.CTkLabel(
                 self.templates_list, text=msg,
-                font=("JetBrains Mono", 11), text_color=TEXT3, justify="left",
+                font=("JetBrains Mono", 11), text_color=("gray25","gray80"), justify="left",
             ).pack(anchor="w", padx=12, pady=12)
             return
 
+        # Список уже отсортирован по дате изменения файла (новые
+        # сверху, см. _scan_preps_templates) — группируем по году,
+        # вставляя заголовок года перед первой карточкой этого года.
+        last_year = None
         for tpl in templates:
+            year = tpl.get("year")
+            if year != last_year:
+                ctk.CTkLabel(
+                    self.templates_list, text=str(year) if year else "Дата неизвестна",
+                    font=("JetBrains Mono", 11, "bold"), text_color=("gray20","gray85"),
+                    anchor="w",
+                ).pack(fill="x", padx=10, pady=(14 if last_year is not None else 6, 4))
+                last_year = year
+
             card = ctk.CTkFrame(self.templates_list, fg_color=("gray85","gray20"),
                                  corner_radius=6, cursor="hand2")
             card.pack(fill="x", padx=8, pady=5)
@@ -736,7 +757,7 @@ class ImpositionPage(ctk.CTkFrame):
             meta_lbl = ctk.CTkLabel(
                 card,
                 text=f"№{tpl['order_num']} · {tpl['trim']} мм · бумага {tpl['paper']} · {tpl['binding']}",
-                font=("JetBrains Mono", 10), text_color=TEXT3, anchor="w",
+                font=("JetBrains Mono", 11), text_color=("gray30","gray75"), anchor="w",
             )
             meta_lbl.pack(fill="x", padx=10, pady=(0, 10), anchor="w")
 
