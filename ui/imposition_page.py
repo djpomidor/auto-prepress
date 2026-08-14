@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import config
 from db.database import get_session, get_imposition, save_imposition
 from db.models import Order
@@ -116,21 +117,34 @@ def _binding_matches(order_binding_code: str, order_binding_label: str, template
     return a[:prefix_len] == b[:prefix_len] or a in b or b in a
 
 
-def _scan_preps_templates(order) -> list:
-    """
-    Ищет .tpl шаблоны Preps в папках config.preps_templates,
-    подходящие под обрезной формат и тип скрепления заказа.
-    Возвращает список словарей, отсортированный по имени.
-    """
-    if not order or not order.width or not order.height:
-        return []
+# Кэш "сырого" списка всех .tpl шаблонов (без фильтрации под заказ) —
+# сканирование папок из config.preps_templates рекурсивно, включая
+# сетевую NAS-папку, может занимать заметное время, поэтому не делаем
+# это заново при каждом открытии страницы "Спуск полос". Кэш живёт в
+# памяти процесса приложения (общий для всех заказов и открытий
+# страницы) и обновляется по TTL или вручную — кнопкой ↺.
+_TEMPLATES_CACHE = {"data": None, "timestamp": 0.0, "dirs": None}
+_TEMPLATES_CACHE_TTL = 600  # секунд (10 минут)
 
-    dirs = config.CFG.get("preps_templates", [])
-    trim_pair = {int(order.width), int(order.height)}
-    binding_code  = order.binding or ""
-    binding_label = binding_code_to_label(order.binding) if order.binding else ""
 
-    results = []
+def _scan_all_templates(dirs, force: bool = False) -> list:
+    """
+    Рекурсивно сканирует все папки из dirs (включая вложенные
+    подпапки) и возвращает список ВСЕХ .tpl-файлов с разобранными из
+    имени параметрами — без фильтрации под конкретный заказ. Результат
+    кэшируется на _TEMPLATES_CACHE_TTL секунд; force=True заставляет
+    пересканировать сейчас же (используется кнопкой ↺ "Обновить").
+    """
+    now = time.monotonic()
+    dirs_key = tuple(dirs)
+    cached = _TEMPLATES_CACHE
+    if (not force
+            and cached["data"] is not None
+            and cached["dirs"] == dirs_key
+            and now - cached["timestamp"] < _TEMPLATES_CACHE_TTL):
+        return cached["data"]
+
+    all_templates = []
     seen_paths = set()
     for d in dirs:
         if not d or not os.path.isdir(d):
@@ -153,10 +167,6 @@ def _scan_preps_templates(order) -> list:
                     tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
                 except ValueError:
                     continue
-                if {tw, th} != trim_pair:
-                    continue
-                if binding_code and not _binding_matches(binding_code, binding_label, m.group("binding")):
-                    continue
 
                 path = os.path.join(root, fname)
                 if path in seen_paths:
@@ -166,13 +176,14 @@ def _scan_preps_templates(order) -> list:
                     mtime = os.path.getmtime(path)
                 except OSError:
                     mtime = 0
-                results.append({
+                all_templates.append({
                     "fname": fname,
                     "path": path,
                     "source_dir": d,
                     "order_num": m.group("order"),
                     "name": m.group("name"),
-                    "trim": f"{tw}x{th}",
+                    "trim_w": tw,
+                    "trim_h": th,
                     "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
                     "binding": m.group("binding"),
                     "mtime": mtime,
@@ -180,7 +191,41 @@ def _scan_preps_templates(order) -> list:
                 })
 
     # Сначала новые — по дате изменения файла шаблона (убывание)
-    results.sort(key=lambda r: r["mtime"], reverse=True)
+    all_templates.sort(key=lambda r: r["mtime"], reverse=True)
+
+    cached["data"] = all_templates
+    cached["timestamp"] = now
+    cached["dirs"] = dirs_key
+    return all_templates
+
+
+def _scan_preps_templates(order, force: bool = False) -> list:
+    """
+    Фильтрует закэшированный список .tpl-шаблонов Preps (см.
+    _scan_all_templates — там же живёт сканирование диска/сети) под
+    обрезной формат и тип скрепления заказа. force=True — обновить
+    кэш перед фильтрацией (кнопка ↺).
+    """
+    if not order or not order.width or not order.height:
+        return []
+
+    dirs = config.CFG.get("preps_templates", [])
+    trim_pair = {int(order.width), int(order.height)}
+    binding_code  = order.binding or ""
+    binding_label = binding_code_to_label(order.binding) if order.binding else ""
+
+    all_templates = _scan_all_templates(dirs, force=force)
+
+    results = []
+    for tpl in all_templates:
+        if {tpl["trim_w"], tpl["trim_h"]} != trim_pair:
+            continue
+        if binding_code and not _binding_matches(binding_code, binding_label, tpl["binding"]):
+            continue
+        item = dict(tpl)
+        item["trim"] = f"{tpl['trim_w']}x{tpl['trim_h']}"
+        results.append(item)
+
     return results
 
 
@@ -677,7 +722,7 @@ class ImpositionPage(ctk.CTkFrame):
             hdr, text="↺", width=28, height=24,
             font=("JetBrains Mono", 12),
             fg_color=("gray80","gray25"), hover_color=DARK_BD2,
-            command=self._refresh_templates,
+            command=lambda: self._refresh_templates(force=True),
         ).pack(side="right", padx=10, pady=6)
 
         self._templates_criteria_lbl = ctk.CTkLabel(
@@ -693,8 +738,30 @@ class ImpositionPage(ctk.CTkFrame):
         self.templates_list.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
         self.templates_list.grid_columnconfigure(0, weight=1)
 
-    def _refresh_templates(self):
+    def _refresh_templates(self, force: bool = False):
         if not hasattr(self, "templates_list"):
+            return
+
+        if force:
+            # Принудительное обновление (кнопка ↺) может пересканировать
+            # медленную сетевую папку — делаем это в фоновом потоке,
+            # чтобы не подвешивать интерфейс, и показываем статус, пока
+            # идёт сканирование.
+            for w in self.templates_list.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(
+                self.templates_list, text="Обновляю список шаблонов…",
+                font=("JetBrains Mono", 11), text_color=("gray25","gray80"),
+            ).pack(anchor="w", padx=12, pady=12)
+
+            order = self.order
+
+            def worker():
+                if order and order.width and order.height:
+                    _scan_preps_templates(order, force=True)
+                self.after(0, lambda: self._refresh_templates(force=False))
+
+            threading.Thread(target=worker, daemon=True).start()
             return
 
         for w in self.templates_list.winfo_children():
@@ -719,6 +786,8 @@ class ImpositionPage(ctk.CTkFrame):
             ).pack(anchor="w", padx=12, pady=12)
             return
 
+        # force=False — сканирование папок (в т.ч. сетевой NAS) идёт
+        # только если кэш пуст/устарел, см. _scan_all_templates
         templates = _scan_preps_templates(o)
 
         if not templates:

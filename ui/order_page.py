@@ -10,7 +10,7 @@ from tkinter import ttk
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from datetime import datetime
-from db.database import get_session
+from db.database import get_session, get_imposition
 from db.models import Order
 from binding_types import binding_to_code, binding_code_to_label
 import config
@@ -1281,6 +1281,14 @@ class OrderPage(ctk.CTkFrame):
                 text_color=TEXT2
             )
         self.btn_monitor.pack(fill="x", pady=(0, 8))
+
+        # Если для заказа уже есть сохранённый спуск полос — кнопка
+        # предлагает его отредактировать, а не сделать заново.
+        imposition = get_imposition(self.order.id)
+        if imposition:
+            self.btn_imposition.configure(text="⊞  Редактировать спуск полос")
+        else:
+            self.btn_imposition.configure(text="⊞  Сделать спуск полос")
         self.btn_imposition.pack(fill="x")
 
     def _toggle_monitor(self):
