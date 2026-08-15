@@ -30,6 +30,13 @@ DARK_BD  = "#2e2e2e"
 DARK_BD2 = "#3a3a3a"
 ACCENT   = "#c8f135"
 ACCENT2  = "#9bc429"
+# Для текста-акцента (подзаголовки, статусы) на сером фоне: чистый
+# лайм ACCENT нечитаем на светлом фоне светлой темы, поэтому для
+# текста используем адаптивную пару (тёмно-оливковый на светлой теме
+# / лайм на тёмной) вместо одноцветного ACCENT. Для ФОНА кнопок
+# (fg_color=ACCENT) сам ACCENT остаётся как есть — там всегда тёмный
+# текст поверх, контраст в порядке.
+ACCENT_TEXT = ("#5c7a00", "#c8f135")
 TEXT     = "#e8e8e8"
 TEXT2    = "#888888"
 TEXT3    = "#555555"
@@ -277,13 +284,25 @@ def _find_base_template(kind: str) -> str:
 
 # ── Разбор содержимого .tpl (сигнатуры) ──────────────────────────────
 # Формат .tpl Preps официально не документирован — разбор ниже основан
-# на анализе реальных файлов (Preps 5.3.3). Поля "клапан" и "Gutter"
-# определены эмпирически по соответствию числовых полей строки
-# %SSiPressSheet идущей сразу за %SSiSignature: значения устойчиво
-# совпадают с форматом печатного листа в имени сигнатуры (значит,
-# разбор верный), но для нестандартных/старых файлов поле может не
-# найтись — тогда просто покажется "—", это не мешает копированию
-# сигнатуры целиком (копируется исходный текст блока как есть).
+# на анализе реальных файлов (Preps 5.3.3) и сверен с тем, что Preps
+# показывает в диалогах "Margin Widths"/"Gutter Widths" для примера
+# (клапан 15 мм, Gutter Top/Bottom Half по 3 мм = 6 мм):
+#   • формат листа и ориентация сигнатуры — из строки %SSiPressSheet,
+#     идущей сразу за %SSiSignature: (ширина/высота листа);
+#   • клапан (Bottom margin при горизонтальном листе / Left margin при
+#     вертикальном) — это отступ (X или Y) первой реальной страницы
+#     от края листа, из первой строки %SSiPrshPage: внутри сигнатуры
+#     с ненулевыми шириной/высотой (т.е. это уже размещённая страница,
+#     а не "дефолтная" нулевая заготовка);
+#   • Gutter Widths (расстояние между страницами в голове) — считается
+#     напрямую из фактического зазора между соседними рядами/
+#     колонками страниц этой же сигнатуры (см. _parse_tpl_file); если
+#     в сигнатуре только один ряд/колонка — используется запасной
+#     вариант: общее значение из %SSiPressSheet в шапке файла (единое
+#     на весь шаблон). Делится пополам на "Top Half"/"Bottom Half".
+# Если для нестандартного/старого файла что-то из этого не находится —
+# показываем "—"; на копирование сигнатуры это не влияет (копируется
+# исходный текст блока как есть).
 _PT_PER_MM = 72 / 25.4
 
 _SIG_LINE_RE = re.compile(
@@ -292,6 +311,9 @@ _SIG_LINE_RE = re.compile(
 _PRESSSHEET_RE = re.compile(
     r"^%SSiPressSheet:\s+([\d.]+)\s+([\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+"
     r"(\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)"
+)
+_PRSHPAGE_RE = re.compile(
+    r"^%SSiPrshPage:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"
 )
 
 
@@ -346,6 +368,15 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
     if current is not None:
         signatures.append(current)
 
+    # Gutter Widths — общий параметр листа-заготовки для всего файла,
+    # берём из %SSiPressSheet в шапке (до первой сигнатуры).
+    header_gutter_total_mm = None
+    for line in header_lines:
+        pm = _PRESSSHEET_RE.match(line)
+        if pm:
+            header_gutter_total_mm = _mm(float(pm.group(8)))
+            break
+
     parsed_sigs = []
     for sig in signatures:
         info = {
@@ -355,7 +386,8 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
             "orientation": None,     # "horizontal" | "vertical"
             "clapan_mm": None,
             "clapan_side": None,     # "Bottom" | "Left"
-            "gutter_mm": None,
+            "gutter_half_mm": None,
+            "gutter_total_mm": None,
             "raw_lines": sig["raw_lines"],
         }
         m = _SIG_LINE_RE.match(sig["header_line"])
@@ -366,25 +398,75 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
             except ValueError:
                 pass
 
-        # Первая строка %SSiPressSheet: внутри блока сигнатуры — это
-        # формат печатного листа машины, на которой эта сигнатура
-        # печатается.
+        # Формат печатного листа и ориентация — из первой строки
+        # %SSiPressSheet: внутри блока сигнатуры.
+        horizontal = None
         for line in sig["raw_lines"][1:]:
             pm = _PRESSSHEET_RE.match(line)
             if pm:
-                w_pt, h_pt = float(pm.group(1)), float(pm.group(2))
-                clapan_pt = float(pm.group(6))
-                gutter_pt = float(pm.group(8))
-                w_mm, h_mm = _mm(w_pt), _mm(h_pt)
+                w_mm, h_mm = _mm(float(pm.group(1))), _mm(float(pm.group(2)))
                 # Формат листа в имени шаблонов задаётся в см
                 # (72x52 = 720x520 мм) — округляем до см для показа.
                 info["press_format"] = f"{round(w_mm / 10)}x{round(h_mm / 10)}"
                 horizontal = w_mm >= h_mm
                 info["orientation"] = "horizontal" if horizontal else "vertical"
                 info["clapan_side"] = "Bottom" if horizontal else "Left"
-                info["clapan_mm"] = _mm(clapan_pt)
-                info["gutter_mm"] = _mm(gutter_pt)
                 break
+
+        # Клапан и Gutter — на основе всех реально размещённых страниц
+        # сигнатуры (не "нулевых" заготовок) из строк %SSiPrshPage:.
+        #   • Клапан (Bottom margin при горизонтальном листе / Left
+        #     margin при вертикальном) — отступ первой страницы (Y или
+        #     X) от края листа.
+        #   • Gutter Widths (расстояние между страницами в голове) —
+        #     фактический зазор между соседними рядами (гориз.) или
+        #     колонками (верт.) страниц: gap = позиция_след_ряда −
+        #     (позиция_пред_ряда + высота/ширина_страницы). Делится
+        #     пополам на "Top Half"/"Bottom Half" (или "Left"/"Right"),
+        #     как показывает Preps. Если в сигнатуре только один
+        #     ряд/колонка — посчитать зазор нечем, тогда берём общее
+        #     значение из %SSiPressSheet в шапке файла (единое на
+        #     весь шаблон) как запасной вариант.
+        real_pages = []
+        for line in sig["raw_lines"][1:]:
+            ppm = _PRSHPAGE_RE.match(line)
+            if not ppm:
+                continue
+            x, y, w, h = (float(v) for v in ppm.groups())
+            if w > 0 and h > 0:
+                real_pages.append((x, y, w, h))
+
+        if real_pages and horizontal is not None:
+            first_x, first_y, first_w, first_h = real_pages[0]
+            offset = first_y if horizontal else first_x
+            info["clapan_mm"] = round(offset / _PT_PER_MM, 1)
+
+            # Группируем по позиции ряда (Y) при горизонтальном листе,
+            # или по позиции колонки (X) при вертикальном; берём
+            # позицию с точностью до 0.1pt, чтобы не разъезжались
+            # страницы одного ряда из-за погрешности float.
+            groups = {}
+            for x, y, w, h in real_pages:
+                key = round(y if horizontal else x, 1)
+                size = h if horizontal else w
+                groups.setdefault(key, size)
+            positions = sorted(groups.keys())
+
+            gap_pt = None
+            if len(positions) >= 2:
+                p0 = positions[0]
+                gap_pt = positions[1] - (p0 + groups[p0])
+
+            if gap_pt is not None and gap_pt > 0:
+                gutter_total_mm = round(gap_pt / _PT_PER_MM, 1)
+                info["gutter_total_mm"] = gutter_total_mm
+                info["gutter_half_mm"] = round(gutter_total_mm / 2, 1)
+            elif header_gutter_total_mm is not None:
+                info["gutter_total_mm"] = header_gutter_total_mm
+                info["gutter_half_mm"] = round(header_gutter_total_mm / 2, 1)
+        elif header_gutter_total_mm is not None:
+            info["gutter_total_mm"] = header_gutter_total_mm
+            info["gutter_half_mm"] = round(header_gutter_total_mm / 2, 1)
 
         parsed_sigs.append(info)
 
@@ -401,14 +483,45 @@ def _sanitize_name_for_filename(name: str) -> str:
     return name or "Order"
 
 
+def order_folder_name_part(order) -> str:
+    """
+    Название для имени файла нового шаблона — ТО ЖЕ САМОЕ, что
+    используется в реальном имени папки заказа на диске (папка
+    создаётся в order_page.py с транслитерацией кириллицы и
+    очисткой имени — см. функцию translit() там же). Берём его прямо
+    из фактического пути order.folder_path (обрезая номерной префикс
+    "NNNN_"), чтобы имя в шаблоне гарантированно совпадало с папкой,
+    а не дублировало логику транслитерации отдельно.
+    """
+    folder_path = getattr(order, "folder_path", None) if order else None
+    if folder_path:
+        # Разбираем путь вручную по обоим вариантам разделителя
+        # (\ и /) — os.path.basename зависит от ОС, на которой
+        # выполняется код, а order.folder_path всегда в формате
+        # Windows-пути (сеть/диск P:), даже если сам код когда-то
+        # запускается для тестов не на Windows.
+        parts = [p for p in re.split(r"[\\/]+", str(folder_path)) if p]
+        base = parts[-1] if parts else ""
+        m = re.match(r"^\d+_(.+)$", base)
+        if m and m.group(1):
+            return m.group(1)
+        if base:
+            return base
+    # Запасной вариант — папка заказа ещё не создана на диске,
+    # используем упрощённую очистку "сырого" названия заказа.
+    return _sanitize_name_for_filename(order.name if order else "")
+
+
 def build_template_filename(order, press_format: str, binding_token: str) -> str:
     """
     Собирает имя нового шаблона по принятой схеме:
         <номер>_<название>_<обрезнойформат>_<форматбумаги>_<скрепление>.tpl
     напр. "0027_Comix_163x245_72x52_Shitie.tpl"
+    Название — то же, что в имени папки заказа на диске (см.
+    order_folder_name_part).
     """
     number = f"{order.number:04d}" if order and order.number else "0000"
-    name = _sanitize_name_for_filename(order.name if order else "")
+    name = order_folder_name_part(order)
     trim = f"{int(order.width)}x{int(order.height)}" if order and order.width and order.height else "0x0"
     press = (press_format or "").strip().replace(" ", "")
     binding_token = (binding_token or "").strip()
@@ -678,7 +791,7 @@ class ImpositionPage(ctk.CTkFrame):
             text="▶  Распознать",
             font=("JetBrains Mono", 13, "bold"),
             fg_color=ACCENT, hover_color=ACCENT2,
-            text_color=DARK_BG, height=38,
+            text_color="black", height=38,
             command=self._analyze,
             state="disabled",
         )
@@ -938,7 +1051,7 @@ class ImpositionPage(ctk.CTkFrame):
     def _build_templates_panel(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=("gray90","gray17"), corner_radius=0)
         frame.grid(row=0, column=0, sticky="nsew")
-        frame.grid_rowconfigure(3, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
         hdr = ctk.CTkFrame(frame, fg_color=("gray85","gray20"), height=36, corner_radius=0)
@@ -956,23 +1069,30 @@ class ImpositionPage(ctk.CTkFrame):
             command=lambda: self._refresh_templates(force=True),
         ).pack(side="right", padx=10, pady=6)
 
-        # ── "Создать шаблон" / панель активного черновика ─────────
+        # ── "Создать шаблон" / панель активного черновика — включает
+        # название нового шаблона и (под ним) инфо о заказе, по
+        # которому шаблон собирается (см. _render_draft_bar).
         self._draft_frame = ctk.CTkFrame(frame, fg_color=("gray88","gray15"), corner_radius=0)
         self._draft_frame.grid(row=1, column=0, sticky="ew")
         self._render_draft_bar()
-
-        self._templates_criteria_lbl = ctk.CTkLabel(
-            frame, text="", font=("JetBrains Mono", 10),
-            text_color=("gray25","gray80"), justify="left", anchor="w", wraplength=280,
-        )
-        self._templates_criteria_lbl.grid(row=2, column=0, sticky="ew", padx=14, pady=(10, 4))
 
         self.templates_list = ctk.CTkScrollableFrame(
             frame, fg_color="transparent",
             scrollbar_button_color=DARK_BD,
         )
-        self.templates_list.grid(row=3, column=0, sticky="nsew", padx=0, pady=0)
+        self.templates_list.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
         self.templates_list.grid_columnconfigure(0, weight=1)
+
+    def _order_criteria_text(self) -> str:
+        """Заказ №/Формат/Скрепление — контекст, по которому подбираются
+        и называются шаблоны. Показывается под названием в панели
+        "Создать шаблон" (см. _render_draft_bar)."""
+        if not self.order:
+            return "Заказ не найден."
+        o = self.order
+        fmt = f"{o.width}×{o.height} мм" if o.width and o.height else "формат не указан"
+        binding = binding_code_to_label(o.binding) if o.binding else "скрепление не указано"
+        return f"Заказ № {o.number:04d}\nФормат: {fmt}\nСкрепление: {binding}"
 
     # ── ЧЕРНОВИК НОВОГО ШАБЛОНА ("Создать шаблон") ──────────────────
     def _render_draft_bar(self):
@@ -983,10 +1103,15 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkButton(
                 self._draft_frame, text="➕  Создать шаблон",
                 font=("JetBrains Mono", 12, "bold"),
-                fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+                fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
                 height=32,
                 command=self._open_create_template_dialog,
-            ).pack(fill="x", padx=10, pady=10)
+            ).pack(fill="x", padx=10, pady=(10, 6))
+            ctk.CTkLabel(
+                self._draft_frame, text=self._order_criteria_text(),
+                font=("JetBrains Mono", 10), text_color=("gray25","gray80"),
+                justify="left", anchor="w", wraplength=280,
+            ).pack(fill="x", padx=10, pady=(0, 10))
             return
 
         draft = self._tpl_draft
@@ -996,9 +1121,14 @@ class ImpositionPage(ctk.CTkFrame):
         ).pack(fill="x", padx=10, pady=(10, 0))
         ctk.CTkLabel(
             self._draft_frame, text=draft["filename"],
-            font=("JetBrains Mono", 12, "bold"), text_color=ACCENT, anchor="w",
+            font=("JetBrains Mono", 12, "bold"), text_color=ACCENT_TEXT, anchor="w",
             wraplength=270, justify="left",
         ).pack(fill="x", padx=10, pady=(2, 6))
+        ctk.CTkLabel(
+            self._draft_frame, text=self._order_criteria_text(),
+            font=("JetBrains Mono", 10), text_color=("gray25","gray80"),
+            justify="left", anchor="w", wraplength=280,
+        ).pack(fill="x", padx=10, pady=(0, 8))
 
         if not draft["signatures"]:
             ctk.CTkLabel(
@@ -1028,7 +1158,8 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             btns, text="💾  Сохранить",
             font=("JetBrains Mono", 11, "bold"),
-            fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+            fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
+            text_color_disabled=("gray30", "gray40"),
             height=30,
             state="normal" if draft["signatures"] else "disabled",
             command=self._save_template_draft,
@@ -1066,11 +1197,11 @@ class ImpositionPage(ctk.CTkFrame):
 
         pad = {"padx": 16, "pady": (10, 0)}
 
-        ctk.CTkLabel(dlg, text=f"Заказ №{self.order.number:04d} · {self.order.width}x{self.order.height} мм",
+        ctk.CTkLabel(dlg, text=f"Заказ № {self.order.number:04d} · {self.order.width}x{self.order.height} мм",
                      font=("JetBrains Mono", 11, "bold")).pack(anchor="w", **pad)
 
         ctk.CTkLabel(dlg, text="Название (для имени файла):", font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
-        v_name = tk.StringVar(value=_sanitize_name_for_filename(self.order.name))
+        v_name = tk.StringVar(value=order_folder_name_part(self.order))
         ctk.CTkEntry(dlg, textvariable=v_name, font=("JetBrains Mono", 11)).pack(fill="x", padx=16, pady=(2, 0))
 
         ctk.CTkLabel(dlg, text="Формат печатной машины (см), напр. 72x52:",
@@ -1088,7 +1219,7 @@ class ImpositionPage(ctk.CTkFrame):
         v_binding.set(binding_titles[0] if binding_titles else "Shitie")
         v_binding.pack(fill="x", padx=16, pady=(2, 0))
 
-        preview_lbl = ctk.CTkLabel(dlg, text="", font=("JetBrains Mono", 10, "bold"), text_color=ACCENT,
+        preview_lbl = ctk.CTkLabel(dlg, text="", font=("JetBrains Mono", 10, "bold"), text_color=ACCENT_TEXT,
                                     wraplength=380, justify="left")
         preview_lbl.pack(anchor="w", padx=16, pady=(10, 0))
 
@@ -1128,7 +1259,7 @@ class ImpositionPage(ctk.CTkFrame):
         btn_row.pack(fill="x", padx=16, pady=16, side="bottom")
         ctk.CTkButton(
             btn_row, text="Создать", font=("JetBrains Mono", 12, "bold"),
-            fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+            fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
             command=on_create,
         ).pack(side="left", fill="x", expand=True, padx=(0, 6))
         ctk.CTkButton(
@@ -1198,7 +1329,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._tpl_draft = None
         self._render_draft_bar()
-        self._status_lbl.configure(text=f"✓ Шаблон сохранён: {os.path.basename(save_path)}", text_color=ACCENT)
+        self._status_lbl.configure(text=f"✓ Шаблон сохранён: {os.path.basename(save_path)}", text_color=ACCENT_TEXT)
         # Новый файл появился на диске — обновляем список (форс,
         # чтобы он сразу попал в кэш и в список, если формат/скрепление
         # заказа совпадают)
@@ -1228,17 +1359,25 @@ class ImpositionPage(ctk.CTkFrame):
             row = ctk.CTkFrame(container, fg_color=("gray80","gray23"), corner_radius=4)
             row.pack(fill="x", padx=8, pady=3)
 
+            # Кнопку пакуем ПЕРВОЙ (side="right"), чтобы она гарантированно
+            # получала своё место и не пропадала за правым краем, если
+            # строка с текстом не помещается по ширине.
+            add_btn = ctk.CTkButton(
+                row, text="+", font=("JetBrains Mono", 20, "bold"),
+                fg_color=("gray70","gray30"), hover_color=ACCENT2, text_color=("gray10","white"),
+                height=34, width=34,
+                command=lambda s=sig, fn=source_fname: self._add_signature_to_draft(s, fn),
+            )
+            add_btn.pack(side="right", padx=8, pady=6)
+
             info_lines = [f"▪ {sig['name'] or '(без имени)'}"]
             details = []
             if sig["pages"] is not None:
                 details.append(f"{sig['pages']} стр.")
-            if sig["press_format"]:
-                orient = "гориз." if sig["orientation"] == "horizontal" else "верт."
-                details.append(f"{sig['press_format']} см ({orient})")
             if sig["clapan_mm"] is not None:
-                details.append(f"клапан {sig['clapan_side']} {sig['clapan_mm']} мм")
-            if sig["gutter_mm"] is not None:
-                details.append(f"Gutter {sig['gutter_mm']} мм")
+                details.append(f"Клапан: {sig['clapan_mm']} мм")
+            if sig["gutter_total_mm"] is not None:
+                details.append(f"В голове: {sig['gutter_total_mm']} мм")
             if details:
                 info_lines.append("  " + " · ".join(details))
 
@@ -1246,13 +1385,6 @@ class ImpositionPage(ctk.CTkFrame):
                 row, text="\n".join(info_lines), font=("JetBrains Mono", 10),
                 text_color=("gray20","gray85"), justify="left", anchor="w",
             ).pack(side="left", padx=(8, 4), pady=6, fill="x", expand=True)
-
-            ctk.CTkButton(
-                row, text="+ Добавить в шаблон", font=("JetBrains Mono", 9, "bold"),
-                fg_color=("gray70","gray30"), hover_color=ACCENT2,
-                height=24, width=140,
-                command=lambda s=sig, fn=source_fname: self._add_signature_to_draft(s, fn),
-            ).pack(side="right", padx=8, pady=6)
 
     def _refresh_templates(self, force: bool = False):
         if not hasattr(self, "templates_list"):
@@ -1284,15 +1416,13 @@ class ImpositionPage(ctk.CTkFrame):
             w.destroy()
 
         if not self.order:
-            self._templates_criteria_lbl.configure(text="Заказ не найден.")
+            ctk.CTkLabel(
+                self.templates_list, text="Заказ не найден.",
+                font=("JetBrains Mono", 11), text_color=("gray25","gray80"), justify="left",
+            ).pack(anchor="w", padx=12, pady=12)
             return
 
         o = self.order
-        fmt = f"{o.width}×{o.height} мм" if o.width and o.height else "формат не указан"
-        binding = binding_code_to_label(o.binding) if o.binding else "скрепление не указано"
-        self._templates_criteria_lbl.configure(
-            text=f"Заказ №{o.number:04d}\nФормат: {fmt}\nСкрепление: {binding}"
-        )
 
         if not o.width or not o.height:
             ctk.CTkLabel(
@@ -1343,7 +1473,7 @@ class ImpositionPage(ctk.CTkFrame):
 
             name_lbl = ctk.CTkLabel(
                 text_col, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
-                text_color=ACCENT, anchor="w", justify="left", wraplength=230,
+                text_color=ACCENT_TEXT, anchor="w", justify="left", wraplength=230,
                 cursor="hand2",
             )
             name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
@@ -1362,8 +1492,8 @@ class ImpositionPage(ctk.CTkFrame):
 
             is_expanded = self._tpl_expanded.get(tpl["path"], False)
             expand_btn = ctk.CTkButton(
-                header_row, text=("▾" if is_expanded else "▸"), width=28, height=28,
-                font=("JetBrains Mono", 12),
+                header_row, text=("▾" if is_expanded else "▸"), width=34, height=34,
+                font=("JetBrains Mono", 20, "bold"),
                 fg_color="transparent", hover_color=DARK_BD2, text_color=("gray30","gray80"),
                 command=lambda p=tpl["path"], c=sig_container, b=None: self._on_expand_click(p, c),
             )
@@ -1510,7 +1640,7 @@ class ImpositionPage(ctk.CTkFrame):
         self._on_view_change("📷 Фото")
 
         self._photo_status_lbl.configure(
-            text=f"✓ {os.path.basename(saved_path)}", text_color=ACCENT
+            text=f"✓ {os.path.basename(saved_path)}", text_color=ACCENT_TEXT
         )
         self.btn_analyze.configure(state="normal")
         self._status_lbl.configure(text="Фото загружено")
@@ -1591,7 +1721,7 @@ class ImpositionPage(ctk.CTkFrame):
             two_sided=self.v_two.get(),
             sheets_json=json.dumps(sheets, ensure_ascii=False) if sheets else None,
         )
-        self._status_lbl.configure(text="✓ Спуск сохранён", text_color=ACCENT)
+        self._status_lbl.configure(text="✓ Спуск сохранён", text_color=ACCENT_TEXT)
 
     # ── ANALYZE ───────────────────────────────────────────────────
     def _analyze(self):
@@ -1722,7 +1852,7 @@ class ImpositionPage(ctk.CTkFrame):
                 hdr,
                 text=f"  {sheet['label']}",
                 font=("JetBrains Mono", 10),
-                text_color=ACCENT if sheet["side"] == "face" else INFO
+                text_color=ACCENT_TEXT if sheet["side"] == "face" else INFO
             ).pack(side="left")
             ctk.CTkLabel(
                 hdr,
