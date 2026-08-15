@@ -123,7 +123,7 @@ def _binding_matches(order_binding_code: str, order_binding_label: str, template
 # это заново при каждом открытии страницы "Спуск полос". Кэш живёт в
 # памяти процесса приложения (общий для всех заказов и открытий
 # страницы) и обновляется по TTL или вручную — кнопкой ↺.
-_TEMPLATES_CACHE = {"data": None, "timestamp": 0.0, "dirs": None}
+_TEMPLATES_CACHE = {"data": None, "timestamp": 0.0, "dirs": None, "all_tpl_paths": []}
 _TEMPLATES_CACHE_TTL = 600  # секунд (10 минут)
 
 
@@ -134,6 +134,13 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
     имени параметрами — без фильтрации под конкретный заказ. Результат
     кэшируется на _TEMPLATES_CACHE_TTL секунд; force=True заставляет
     пересканировать сейчас же (используется кнопкой ↺ "Обновить").
+
+    Заодно (в том же проходе по диску/сети) запоминает пути ВСЕХ .tpl
+    файлов, включая те, что не подходят под формат имени
+    "номер_название_формат_бумага_скрепление.tpl" — например, пустые
+    шаблоны-заготовки ("пустой шаблон Saddle Stitched.tpl" и т.п.),
+    используемые как основа при создании нового шаблона (см.
+    _find_base_template).
     """
     now = time.monotonic()
     dirs_key = tuple(dirs)
@@ -145,6 +152,7 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
         return cached["data"]
 
     all_templates = []
+    all_tpl_paths = []
     seen_paths = set()
     for d in dirs:
         if not d or not os.path.isdir(d):
@@ -160,6 +168,9 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
             for fname in files:
                 if not fname.lower().endswith(".tpl"):
                     continue
+                path = os.path.join(root, fname)
+                all_tpl_paths.append(path)
+
                 m = _TEMPLATE_RE.match(fname)
                 if not m:
                     continue
@@ -168,7 +179,6 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
                 except ValueError:
                     continue
 
-                path = os.path.join(root, fname)
                 if path in seen_paths:
                     continue
                 seen_paths.add(path)
@@ -196,6 +206,7 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
     cached["data"] = all_templates
     cached["timestamp"] = now
     cached["dirs"] = dirs_key
+    cached["all_tpl_paths"] = all_tpl_paths
     return all_templates
 
 
@@ -229,6 +240,217 @@ def _scan_preps_templates(order, force: bool = False) -> list:
     return results
 
 
+def _find_base_template(kind: str) -> str:
+    """
+    Ищет пустой шаблон-заготовку Preps (без номера заказа в имени),
+    используемую как основа при создании нового шаблона (заголовок
+    + пустой лист, без сигнатур). kind: "saddle" (Saddle Stitched —
+    для скрепки) или "perfect" (Perfect Bound — для всего
+    остального).
+
+    Приоритет: явный путь в config.json → preps_empty_templates →
+    {saddle|perfect}. Если не задан или файл не найден — ищем в
+    папках preps_templates файл, в имени которого есть оба ключевых
+    слова ("saddle"+"stitch" или "perfect"+"bound"), регистр не
+    важен — под это подходят присланные "пустой шаблон Saddle
+    Stitched.tpl" / "пустой шаблон Perfect Bound.tpl".
+    """
+    override = (config.CFG.get("preps_empty_templates", {}) or {}).get(kind)
+    if override and os.path.isfile(override):
+        return override
+
+    dirs = config.CFG.get("preps_templates", [])
+    _scan_all_templates(dirs)  # обеспечиваем свежий кэш (без force)
+    keywords = {
+        "saddle":  ("saddle", "stitch"),
+        "perfect": ("perfect", "bound"),
+    }.get(kind, ())
+    if not keywords:
+        return None
+
+    for path in _TEMPLATES_CACHE.get("all_tpl_paths") or []:
+        low = os.path.basename(path).lower()
+        if all(k in low for k in keywords):
+            return path
+    return None
+
+
+# ── Разбор содержимого .tpl (сигнатуры) ──────────────────────────────
+# Формат .tpl Preps официально не документирован — разбор ниже основан
+# на анализе реальных файлов (Preps 5.3.3). Поля "клапан" и "Gutter"
+# определены эмпирически по соответствию числовых полей строки
+# %SSiPressSheet идущей сразу за %SSiSignature: значения устойчиво
+# совпадают с форматом печатного листа в имени сигнатуры (значит,
+# разбор верный), но для нестандартных/старых файлов поле может не
+# найтись — тогда просто покажется "—", это не мешает копированию
+# сигнатуры целиком (копируется исходный текст блока как есть).
+_PT_PER_MM = 72 / 25.4
+
+_SIG_LINE_RE = re.compile(
+    r"^%SSiSignature:\s*\|(?P<name>[^|]*)\|\s+(?P<pages>\d+)", re.IGNORECASE
+)
+_PRESSSHEET_RE = re.compile(
+    r"^%SSiPressSheet:\s+([\d.]+)\s+([\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+"
+    r"(\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)"
+)
+
+
+def _mm(pt: float) -> float:
+    return round(pt / _PT_PER_MM, 1)
+
+
+_TPL_PARSE_CACHE = {}  # path -> (mtime, header_lines, signatures)
+
+
+def _parse_tpl_file(path: str, force: bool = False) -> tuple:
+    """
+    Разбирает .tpl файл на "шапку" (всё до первой %SSiSignature:) и
+    список сигнатур. Каждая сигнатура — от своей строки %SSiSignature:
+    до строки перед следующей %SSiSignature: (или до конца файла),
+    включительно, с сохранением исходных строк как есть (raw_lines) —
+    именно этот кусок текста копируется в новый шаблон при нажатии
+    "Добавить в шаблон".
+
+    Кэшируется по (путь, mtime файла) — повторное открытие того же
+    шаблона в интерфейсе не читает файл с диска заново, пока он не
+    изменился.
+    """
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+
+    cached = _TPL_PARSE_CACHE.get(path)
+    if not force and cached and cached[0] == mtime:
+        return cached[1], cached[2]
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            lines = f.readlines()
+    except Exception:
+        return [], []
+
+    header_lines = []
+    signatures = []
+    current = None
+
+    for line in lines:
+        if line.startswith("%SSiSignature:"):
+            if current is not None:
+                signatures.append(current)
+            current = {"raw_lines": [line], "header_line": line}
+        elif current is not None:
+            current["raw_lines"].append(line)
+        else:
+            header_lines.append(line)
+    if current is not None:
+        signatures.append(current)
+
+    parsed_sigs = []
+    for sig in signatures:
+        info = {
+            "name": None,
+            "pages": None,
+            "press_format": None,
+            "orientation": None,     # "horizontal" | "vertical"
+            "clapan_mm": None,
+            "clapan_side": None,     # "Bottom" | "Left"
+            "gutter_mm": None,
+            "raw_lines": sig["raw_lines"],
+        }
+        m = _SIG_LINE_RE.match(sig["header_line"])
+        if m:
+            info["name"] = m.group("name") or "(без имени)"
+            try:
+                info["pages"] = int(m.group("pages"))
+            except ValueError:
+                pass
+
+        # Первая строка %SSiPressSheet: внутри блока сигнатуры — это
+        # формат печатного листа машины, на которой эта сигнатура
+        # печатается.
+        for line in sig["raw_lines"][1:]:
+            pm = _PRESSSHEET_RE.match(line)
+            if pm:
+                w_pt, h_pt = float(pm.group(1)), float(pm.group(2))
+                clapan_pt = float(pm.group(6))
+                gutter_pt = float(pm.group(8))
+                w_mm, h_mm = _mm(w_pt), _mm(h_pt)
+                # Формат листа в имени шаблонов задаётся в см
+                # (72x52 = 720x520 мм) — округляем до см для показа.
+                info["press_format"] = f"{round(w_mm / 10)}x{round(h_mm / 10)}"
+                horizontal = w_mm >= h_mm
+                info["orientation"] = "horizontal" if horizontal else "vertical"
+                info["clapan_side"] = "Bottom" if horizontal else "Left"
+                info["clapan_mm"] = _mm(clapan_pt)
+                info["gutter_mm"] = _mm(gutter_pt)
+                break
+
+        parsed_sigs.append(info)
+
+    _TPL_PARSE_CACHE[path] = (mtime, header_lines, parsed_sigs)
+    return header_lines, parsed_sigs
+
+
+def _sanitize_name_for_filename(name: str) -> str:
+    """Убирает из названия заказа символы, недопустимые в имени файла
+    (и подчёркивания-разделители самого имени шаблона)."""
+    name = (name or "").strip()
+    name = re.sub(r'[\\/:*?"<>|]', "", name)
+    name = re.sub(r"\s+", "", name)
+    return name or "Order"
+
+
+def build_template_filename(order, press_format: str, binding_token: str) -> str:
+    """
+    Собирает имя нового шаблона по принятой схеме:
+        <номер>_<название>_<обрезнойформат>_<форматбумаги>_<скрепление>.tpl
+    напр. "0027_Comix_163x245_72x52_Shitie.tpl"
+    """
+    number = f"{order.number:04d}" if order and order.number else "0000"
+    name = _sanitize_name_for_filename(order.name if order else "")
+    trim = f"{int(order.width)}x{int(order.height)}" if order and order.width and order.height else "0x0"
+    press = (press_format or "").strip().replace(" ", "")
+    binding_token = (binding_token or "").strip()
+    return f"{number}_{name}_{trim}_{press}_{binding_token}.tpl"
+
+
+def build_new_template_content(base_path: str, new_name_no_ext: str, signatures_raw: list) -> list:
+    """
+    Собирает содержимое нового .tpl: берёт "шапку" из base_path
+    (пустой шаблон-заготовка Saddle Stitched/Perfect Bound), меняет в
+    ней внутреннее имя макета (строки "Template File: ...путь..." и
+    "%SSiLayout: |имя| |имя| ...") на новое, и дописывает в конец
+    сырые блоки выбранных сигнатур (raw_lines — как есть, без
+    пересчёта координат: сигнатура просто копируется в новый файл).
+    Возвращает список строк (с их исходными \\r\\n) — записывать через
+    open(path, "w", encoding="utf-8", newline="").
+    """
+    header_lines, _sigs = _parse_tpl_file(base_path)
+    if not header_lines:
+        with open(base_path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            header_lines = f.readlines()
+
+    out_lines = []
+    for line in header_lines:
+        stripped = line.rstrip("\r\n")
+        if "Template File:" in stripped:
+            out_lines.append(f"% This: Template File: {new_name_no_ext}.tpl\r\n")
+        elif stripped.startswith("%SSiLayout:"):
+            m = re.match(r"^(%SSiLayout:\s*\|)[^|]*(\|\s*\|)[^|]*(\|.*)$", stripped)
+            if m:
+                out_lines.append(f"{m.group(1)}{new_name_no_ext}{m.group(2)}{new_name_no_ext}{m.group(3)}\r\n")
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(line)
+
+    for raw_lines in signatures_raw:
+        out_lines.extend(raw_lines)
+
+    return out_lines
+
+
 class ImpositionPage(ctk.CTkFrame):
     def __init__(self, parent, app, order_id: int = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
@@ -246,6 +468,15 @@ class ImpositionPage(ctk.CTkFrame):
         # Сохранённая ранее (в БД) запись спуска полос для этого
         # заказа, если она есть — подхватываем фото и сетку.
         self.imposition = None
+
+        # "Черновик" нового шаблона Preps, который собирается из
+        # сигнатур, добавляемых из уже существующих шаблонов (см.
+        # _open_create_template_dialog / _add_signature_to_draft).
+        # None — черновика нет, показываем кнопку "Создать шаблон".
+        self._tpl_draft = None
+        # path -> bool, какие карточки шаблонов сейчас развёрнуты
+        # (показывают список своих сигнатур)
+        self._tpl_expanded = {}
 
         if order_id:
             session = get_session()
@@ -707,7 +938,7 @@ class ImpositionPage(ctk.CTkFrame):
     def _build_templates_panel(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=("gray90","gray17"), corner_radius=0)
         frame.grid(row=0, column=0, sticky="nsew")
-        frame.grid_rowconfigure(2, weight=1)
+        frame.grid_rowconfigure(3, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
         hdr = ctk.CTkFrame(frame, fg_color=("gray85","gray20"), height=36, corner_radius=0)
@@ -725,18 +956,303 @@ class ImpositionPage(ctk.CTkFrame):
             command=lambda: self._refresh_templates(force=True),
         ).pack(side="right", padx=10, pady=6)
 
+        # ── "Создать шаблон" / панель активного черновика ─────────
+        self._draft_frame = ctk.CTkFrame(frame, fg_color=("gray88","gray15"), corner_radius=0)
+        self._draft_frame.grid(row=1, column=0, sticky="ew")
+        self._render_draft_bar()
+
         self._templates_criteria_lbl = ctk.CTkLabel(
             frame, text="", font=("JetBrains Mono", 10),
             text_color=("gray25","gray80"), justify="left", anchor="w", wraplength=280,
         )
-        self._templates_criteria_lbl.grid(row=1, column=0, sticky="ew", padx=14, pady=(10, 4))
+        self._templates_criteria_lbl.grid(row=2, column=0, sticky="ew", padx=14, pady=(10, 4))
 
         self.templates_list = ctk.CTkScrollableFrame(
             frame, fg_color="transparent",
             scrollbar_button_color=DARK_BD,
         )
-        self.templates_list.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
+        self.templates_list.grid(row=3, column=0, sticky="nsew", padx=0, pady=0)
         self.templates_list.grid_columnconfigure(0, weight=1)
+
+    # ── ЧЕРНОВИК НОВОГО ШАБЛОНА ("Создать шаблон") ──────────────────
+    def _render_draft_bar(self):
+        for w in self._draft_frame.winfo_children():
+            w.destroy()
+
+        if self._tpl_draft is None:
+            ctk.CTkButton(
+                self._draft_frame, text="➕  Создать шаблон",
+                font=("JetBrains Mono", 12, "bold"),
+                fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+                height=32,
+                command=self._open_create_template_dialog,
+            ).pack(fill="x", padx=10, pady=10)
+            return
+
+        draft = self._tpl_draft
+        ctk.CTkLabel(
+            self._draft_frame, text="ЧЕРНОВИК ШАБЛОНА",
+            font=("JetBrains Mono", 9, "bold"), text_color=("gray25","gray80"), anchor="w",
+        ).pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(
+            self._draft_frame, text=draft["filename"],
+            font=("JetBrains Mono", 12, "bold"), text_color=ACCENT, anchor="w",
+            wraplength=270, justify="left",
+        ).pack(fill="x", padx=10, pady=(2, 6))
+
+        if not draft["signatures"]:
+            ctk.CTkLabel(
+                self._draft_frame,
+                text="Пока пусто. Разверните шаблон в списке ниже\nи нажмите «+ Добавить в шаблон» на нужной\nсигнатуре.",
+                font=("JetBrains Mono", 10), text_color=("gray30","gray70"),
+                justify="left", anchor="w",
+            ).pack(fill="x", padx=10, pady=(0, 6))
+        else:
+            for i, item in enumerate(draft["signatures"]):
+                row = ctk.CTkFrame(self._draft_frame, fg_color=("gray82","gray22"), corner_radius=4)
+                row.pack(fill="x", padx=10, pady=2)
+                ctk.CTkLabel(
+                    row, text=f"{item['sig']['name'] or '?'}  ·  {item['source_fname']}",
+                    font=("JetBrains Mono", 10), text_color=("gray20","gray85"),
+                    anchor="w", justify="left", wraplength=210,
+                ).pack(side="left", padx=(8, 4), pady=4, fill="x", expand=True)
+                ctk.CTkButton(
+                    row, text="✕", width=22, height=22,
+                    font=("JetBrains Mono", 10),
+                    fg_color="transparent", hover_color=DANGER, text_color=("gray30","gray80"),
+                    command=lambda idx=i: self._remove_signature_from_draft(idx),
+                ).pack(side="right", padx=6, pady=4)
+
+        btns = ctk.CTkFrame(self._draft_frame, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=(4, 10))
+        ctk.CTkButton(
+            btns, text="💾  Сохранить",
+            font=("JetBrains Mono", 11, "bold"),
+            fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+            height=30,
+            state="normal" if draft["signatures"] else "disabled",
+            command=self._save_template_draft,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            btns, text="Отмена",
+            font=("JetBrains Mono", 11),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            height=30,
+            command=self._cancel_template_draft,
+        ).pack(side="right", fill="x", expand=True, padx=(4, 0))
+
+    def _open_create_template_dialog(self):
+        if not self.order:
+            messagebox.showwarning("Создать шаблон", "Заказ не найден.")
+            return
+        if not self.order.width or not self.order.height:
+            messagebox.showwarning(
+                "Создать шаблон",
+                "У заказа не указан обрезной формат — без него нельзя\n"
+                "собрать корректное имя файла шаблона."
+            )
+            return
+
+        code = (self.order.binding or "").strip().upper()
+        binding_options = sorted(_BINDING_CODE_TEMPLATE_TOKENS.get(code, {"shitie", "nitki", "tkley", "skrepka"}))
+        binding_titles = [t.capitalize() for t in binding_options]
+        base_kind_default = "saddle" if code == "SKR" else "perfect"
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Создать шаблон")
+        dlg.geometry("420x360")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        pad = {"padx": 16, "pady": (10, 0)}
+
+        ctk.CTkLabel(dlg, text=f"Заказ №{self.order.number:04d} · {self.order.width}x{self.order.height} мм",
+                     font=("JetBrains Mono", 11, "bold")).pack(anchor="w", **pad)
+
+        ctk.CTkLabel(dlg, text="Название (для имени файла):", font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
+        v_name = tk.StringVar(value=_sanitize_name_for_filename(self.order.name))
+        ctk.CTkEntry(dlg, textvariable=v_name, font=("JetBrains Mono", 11)).pack(fill="x", padx=16, pady=(2, 0))
+
+        ctk.CTkLabel(dlg, text="Формат печатной машины (см), напр. 72x52:",
+                     font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
+        v_press = ctk.CTkComboBox(
+            dlg, values=["65x47", "72x52", "64x45", "64x90", "70x100"],
+            font=("JetBrains Mono", 11),
+        )
+        v_press.set("72x52")
+        v_press.pack(fill="x", padx=16, pady=(2, 0))
+
+        ctk.CTkLabel(dlg, text="Тип скрепления (в имени файла):",
+                     font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
+        v_binding = ctk.CTkComboBox(dlg, values=binding_titles, font=("JetBrains Mono", 11))
+        v_binding.set(binding_titles[0] if binding_titles else "Shitie")
+        v_binding.pack(fill="x", padx=16, pady=(2, 0))
+
+        preview_lbl = ctk.CTkLabel(dlg, text="", font=("JetBrains Mono", 10, "bold"), text_color=ACCENT,
+                                    wraplength=380, justify="left")
+        preview_lbl.pack(anchor="w", padx=16, pady=(10, 0))
+
+        def update_preview(*_a):
+            fname = build_template_filename(self.order, v_press.get(), v_binding.get())
+            preview_lbl.configure(text=f"Имя файла: {fname}")
+
+        v_name.trace_add("write", update_preview)
+        v_press.configure(command=lambda _v: update_preview())
+        v_binding.configure(command=lambda _v: update_preview())
+        update_preview()
+
+        err_lbl = ctk.CTkLabel(dlg, text="", font=("JetBrains Mono", 10), text_color=DANGER,
+                                wraplength=380, justify="left")
+        err_lbl.pack(anchor="w", padx=16, pady=(4, 0))
+
+        def on_create():
+            press = v_press.get().strip()
+            if not re.match(r"^\d+[xхX]\d+$", press):
+                err_lbl.configure(text="Формат печатной машины укажите как ЧИСЛОxЧИСЛО, напр. 72x52.")
+                return
+            binding_token = v_binding.get().strip().lower()
+            base_path = _find_base_template(base_kind_default)
+            if not base_path:
+                err_lbl.configure(
+                    text=f"Не найден пустой шаблон-заготовка "
+                         f"({'Saddle Stitched' if base_kind_default == 'saddle' else 'Perfect Bound'}). "
+                         f"Проверьте config.json → preps_empty_templates."
+                )
+                return
+
+            fname = build_template_filename(self.order, press, v_binding.get().strip())
+            self._start_new_template_draft(fname, base_path)
+            dlg.destroy()
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=16, side="bottom")
+        ctk.CTkButton(
+            btn_row, text="Создать", font=("JetBrains Mono", 12, "bold"),
+            fg_color=ACCENT, hover_color=ACCENT2, text_color=DARK_BG,
+            command=on_create,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(
+            btn_row, text="Отмена", font=("JetBrains Mono", 12),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=dlg.destroy,
+        ).pack(side="right", fill="x", expand=True, padx=(6, 0))
+
+    def _start_new_template_draft(self, filename: str, base_path: str):
+        self._tpl_draft = {"filename": filename, "base_path": base_path, "signatures": []}
+        self._render_draft_bar()
+
+    def _add_signature_to_draft(self, sig: dict, source_fname: str):
+        if self._tpl_draft is None:
+            messagebox.showinfo(
+                "Добавить в шаблон",
+                "Сначала нажмите «➕ Создать шаблон» вверху панели —\n"
+                "туда и будут добавляться выбранные сигнатуры."
+            )
+            return
+        self._tpl_draft["signatures"].append({"sig": sig, "source_fname": source_fname})
+        self._render_draft_bar()
+
+    def _remove_signature_from_draft(self, index: int):
+        if self._tpl_draft is None:
+            return
+        try:
+            self._tpl_draft["signatures"].pop(index)
+        except IndexError:
+            pass
+        self._render_draft_bar()
+
+    def _cancel_template_draft(self):
+        if self._tpl_draft and self._tpl_draft["signatures"]:
+            if not messagebox.askyesno("Отменить черновик", "Отменить создание шаблона? Добавленные сигнатуры будут потеряны."):
+                return
+        self._tpl_draft = None
+        self._render_draft_bar()
+
+    def _save_template_draft(self):
+        draft = self._tpl_draft
+        if not draft or not draft["signatures"]:
+            return
+
+        dirs = [d for d in config.CFG.get("preps_templates", []) if d and os.path.isdir(d)]
+        default_dir = dirs[0] if dirs else os.path.dirname(draft["base_path"])
+        save_path = filedialog.asksaveasfilename(
+            title="Сохранить новый шаблон Preps",
+            initialdir=default_dir,
+            initialfile=draft["filename"],
+            defaultextension=".tpl",
+            filetypes=[("Шаблоны Preps", "*.tpl")],
+        )
+        if not save_path:
+            return
+
+        new_name_no_ext = os.path.splitext(os.path.basename(save_path))[0]
+        raw_blocks = [item["sig"]["raw_lines"] for item in draft["signatures"]]
+        content_lines = build_new_template_content(draft["base_path"], new_name_no_ext, raw_blocks)
+
+        try:
+            with open(save_path, "w", encoding="utf-8", newline="") as f:
+                f.writelines(content_lines)
+        except Exception as e:
+            messagebox.showerror("Сохранить шаблон", f"Не удалось сохранить файл:\n{e}")
+            return
+
+        self._tpl_draft = None
+        self._render_draft_bar()
+        self._status_lbl.configure(text=f"✓ Шаблон сохранён: {os.path.basename(save_path)}", text_color=ACCENT)
+        # Новый файл появился на диске — обновляем список (форс,
+        # чтобы он сразу попал в кэш и в список, если формат/скрепление
+        # заказа совпадают)
+        self._refresh_templates(force=True)
+
+    def _render_template_signatures(self, container, path: str):
+        ctk.CTkLabel(
+            container, text="Загружаю сигнатуры…", font=("JetBrains Mono", 10),
+            text_color=("gray30","gray70"),
+        ).pack(anchor="w", padx=10, pady=6)
+        container.update_idletasks()
+
+        _header, signatures = _parse_tpl_file(path)
+
+        for w in container.winfo_children():
+            w.destroy()
+
+        if not signatures:
+            ctk.CTkLabel(
+                container, text="Сигнатур не найдено (или не удалось разобрать файл).",
+                font=("JetBrains Mono", 10), text_color=("gray30","gray70"), justify="left",
+            ).pack(anchor="w", padx=10, pady=6)
+            return
+
+        source_fname = os.path.basename(path)
+        for sig in signatures:
+            row = ctk.CTkFrame(container, fg_color=("gray80","gray23"), corner_radius=4)
+            row.pack(fill="x", padx=8, pady=3)
+
+            info_lines = [f"▪ {sig['name'] or '(без имени)'}"]
+            details = []
+            if sig["pages"] is not None:
+                details.append(f"{sig['pages']} стр.")
+            if sig["press_format"]:
+                orient = "гориз." if sig["orientation"] == "horizontal" else "верт."
+                details.append(f"{sig['press_format']} см ({orient})")
+            if sig["clapan_mm"] is not None:
+                details.append(f"клапан {sig['clapan_side']} {sig['clapan_mm']} мм")
+            if sig["gutter_mm"] is not None:
+                details.append(f"Gutter {sig['gutter_mm']} мм")
+            if details:
+                info_lines.append("  " + " · ".join(details))
+
+            ctk.CTkLabel(
+                row, text="\n".join(info_lines), font=("JetBrains Mono", 10),
+                text_color=("gray20","gray85"), justify="left", anchor="w",
+            ).pack(side="left", padx=(8, 4), pady=6, fill="x", expand=True)
+
+            ctk.CTkButton(
+                row, text="+ Добавить в шаблон", font=("JetBrains Mono", 9, "bold"),
+                fg_color=("gray70","gray30"), hover_color=ACCENT2,
+                height=24, width=140,
+                command=lambda s=sig, fn=source_fname: self._add_signature_to_draft(s, fn),
+            ).pack(side="right", padx=8, pady=6)
 
     def _refresh_templates(self, force: bool = False):
         if not hasattr(self, "templates_list"):
@@ -816,26 +1332,57 @@ class ImpositionPage(ctk.CTkFrame):
                 ).pack(fill="x", padx=10, pady=(14 if last_year is not None else 6, 4))
                 last_year = year
 
-            card = ctk.CTkFrame(self.templates_list, fg_color=("gray85","gray20"),
-                                 corner_radius=6, cursor="hand2")
+            card = ctk.CTkFrame(self.templates_list, fg_color=("gray85","gray20"), corner_radius=6)
             card.pack(fill="x", padx=8, pady=5)
 
+            header_row = ctk.CTkFrame(card, fg_color="transparent", cursor="hand2")
+            header_row.pack(fill="x")
+
+            text_col = ctk.CTkFrame(header_row, fg_color="transparent", cursor="hand2")
+            text_col.pack(side="left", fill="x", expand=True)
+
             name_lbl = ctk.CTkLabel(
-                card, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
-                text_color=ACCENT, anchor="w", justify="left", wraplength=270,
+                text_col, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
+                text_color=ACCENT, anchor="w", justify="left", wraplength=230,
                 cursor="hand2",
             )
             name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
 
             meta_lbl = ctk.CTkLabel(
-                card,
+                text_col,
                 text=f"№{tpl['order_num']} · {tpl['trim']} мм · бумага {tpl['paper']} · {tpl['binding']}",
                 font=("JetBrains Mono", 11), text_color=("gray30","gray75"), anchor="w",
             )
             meta_lbl.pack(fill="x", padx=10, pady=(0, 10), anchor="w")
 
-            for widget in (card, name_lbl, meta_lbl):
+            for widget in (header_row, text_col, name_lbl, meta_lbl):
                 widget.bind("<Button-1>", lambda e, p=tpl["path"]: self._open_template(p))
+
+            sig_container = ctk.CTkFrame(card, fg_color=("gray82","gray18"), corner_radius=0)
+
+            is_expanded = self._tpl_expanded.get(tpl["path"], False)
+            expand_btn = ctk.CTkButton(
+                header_row, text=("▾" if is_expanded else "▸"), width=28, height=28,
+                font=("JetBrains Mono", 12),
+                fg_color="transparent", hover_color=DARK_BD2, text_color=("gray30","gray80"),
+                command=lambda p=tpl["path"], c=sig_container, b=None: self._on_expand_click(p, c),
+            )
+            expand_btn.pack(side="right", padx=8, pady=8)
+
+            if is_expanded:
+                sig_container.pack(fill="x", pady=(0, 6))
+                self._render_template_signatures(sig_container, tpl["path"])
+
+    def _on_expand_click(self, path: str, container):
+        expanded = not self._tpl_expanded.get(path, False)
+        self._tpl_expanded[path] = expanded
+        for w in container.winfo_children():
+            w.destroy()
+        if expanded:
+            container.pack(fill="x", pady=(0, 6))
+            self._render_template_signatures(container, path)
+        else:
+            container.pack_forget()
 
     def _open_template(self, path: str):
         """Открывает .tpl шаблон в программе Preps."""
