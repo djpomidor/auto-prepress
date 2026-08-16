@@ -315,10 +315,55 @@ _PRESSSHEET_RE = re.compile(
 _PRSHPAGE_RE = re.compile(
     r"^%SSiPrshPage:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"
 )
+_PRSHMATRIX_RE = re.compile(
+    r"^%SSiPrshMatrix:\s+(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+(\d+)"
+)
 
 
 def _mm(pt: float) -> float:
     return round(pt / _PT_PER_MM, 1)
+
+
+def _find_gutter_half_pt(raw_lines: list) -> float:
+    """
+    Ищет в блоке сигнатуры половину Gutter Widths (то, что Preps
+    показывает как "Top Half"/"Bottom Half" или "Left Half"/"Right
+    Half" — ось зависит от раскладки конкретной сигнатуры, поэтому в
+    интерфейсе показываем значение без указания стороны).
+
+    Источник — строка "%SSiPrshMatrix: 4 <X> <X> <флаг>" с ОДИНАКОВЫМИ
+    двумя значениями (это и есть половина зазора, повторённая дважды
+    для симметрии). Подтверждено на реальных примерах:
+      • обычная сеточная сигнатура (несколько рядов/колонок страниц)
+        — нужная строка оканчивается флагом "0";
+      • разворотная обложка "голова к голове" (2 страницы, флага "0"
+        с одинаковыми X X нет вовсе) — нужная строка оканчивается
+        флагом "1".
+    Поэтому: сначала ищем первую подходящую строку с флагом "0";
+    если её нет — берём первую с флагом "1". Возвращает половину в pt
+    или None, если такой строки нет вовсе (тогда в интерфейсе будет
+    показано "—", а не гадание).
+    """
+    candidates_0, candidates_1 = [], []
+    for line in raw_lines:
+        m = _PRSHMATRIX_RE.match(line)
+        if not m:
+            continue
+        idx, a, b, flag = m.groups()
+        if idx != "4":
+            continue
+        a, b = float(a), float(b)
+        if a <= 0 or abs(a - b) > 0.01:
+            continue  # не пара одинаковых значений — не то поле
+        if flag == "0":
+            candidates_0.append(a)
+        elif flag == "1":
+            candidates_1.append(a)
+    if candidates_0:
+        return candidates_0[0]
+    if candidates_1:
+        return candidates_1[0]
+    return None
 
 
 _TPL_PARSE_CACHE = {}  # path -> (mtime, header_lines, signatures)
@@ -368,15 +413,6 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
     if current is not None:
         signatures.append(current)
 
-    # Gutter Widths — общий параметр листа-заготовки для всего файла,
-    # берём из %SSiPressSheet в шапке (до первой сигнатуры).
-    header_gutter_total_mm = None
-    for line in header_lines:
-        pm = _PRESSSHEET_RE.match(line)
-        if pm:
-            header_gutter_total_mm = _mm(float(pm.group(8)))
-            break
-
     parsed_sigs = []
     for sig in signatures:
         info = {
@@ -413,20 +449,12 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
                 info["clapan_side"] = "Bottom" if horizontal else "Left"
                 break
 
-        # Клапан и Gutter — на основе всех реально размещённых страниц
-        # сигнатуры (не "нулевых" заготовок) из строк %SSiPrshPage:.
-        #   • Клапан (Bottom margin при горизонтальном листе / Left
-        #     margin при вертикальном) — отступ первой страницы (Y или
-        #     X) от края листа.
-        #   • Gutter Widths (расстояние между страницами в голове) —
-        #     фактический зазор между соседними рядами (гориз.) или
-        #     колонками (верт.) страниц: gap = позиция_след_ряда −
-        #     (позиция_пред_ряда + высота/ширина_страницы). Делится
-        #     пополам на "Top Half"/"Bottom Half" (или "Left"/"Right"),
-        #     как показывает Preps. Если в сигнатуре только один
-        #     ряд/колонка — посчитать зазор нечем, тогда берём общее
-        #     значение из %SSiPressSheet в шапке файла (единое на
-        #     весь шаблон) как запасной вариант.
+        # Клапан — на основе первой реально размещённой страницы
+        # сигнатуры (не "нулевой" заготовки) из строк %SSiPrshPage:.
+        # Клапан (Bottom margin при горизонтальном листе / Left margin
+        # при вертикальном) — отступ первой страницы (Y или X) от края
+        # листа. Подтверждено верным на всех 15 сигнатурах реального
+        # шаблона (и обычных сеточных, и разворотных обложках).
         real_pages = []
         for line in sig["raw_lines"][1:]:
             ppm = _PRSHPAGE_RE.match(line)
@@ -441,32 +469,16 @@ def _parse_tpl_file(path: str, force: bool = False) -> tuple:
             offset = first_y if horizontal else first_x
             info["clapan_mm"] = round(offset / _PT_PER_MM, 1)
 
-            # Группируем по позиции ряда (Y) при горизонтальном листе,
-            # или по позиции колонки (X) при вертикальном; берём
-            # позицию с точностью до 0.1pt, чтобы не разъезжались
-            # страницы одного ряда из-за погрешности float.
-            groups = {}
-            for x, y, w, h in real_pages:
-                key = round(y if horizontal else x, 1)
-                size = h if horizontal else w
-                groups.setdefault(key, size)
-            positions = sorted(groups.keys())
-
-            gap_pt = None
-            if len(positions) >= 2:
-                p0 = positions[0]
-                gap_pt = positions[1] - (p0 + groups[p0])
-
-            if gap_pt is not None and gap_pt > 0:
-                gutter_total_mm = round(gap_pt / _PT_PER_MM, 1)
-                info["gutter_total_mm"] = gutter_total_mm
-                info["gutter_half_mm"] = round(gutter_total_mm / 2, 1)
-            elif header_gutter_total_mm is not None:
-                info["gutter_total_mm"] = header_gutter_total_mm
-                info["gutter_half_mm"] = round(header_gutter_total_mm / 2, 1)
-        elif header_gutter_total_mm is not None:
-            info["gutter_total_mm"] = header_gutter_total_mm
-            info["gutter_half_mm"] = round(header_gutter_total_mm / 2, 1)
+        # Gutter Widths (расстояние между страницами в голове) — см.
+        # _find_gutter_half_pt: подтверждено верным и на обычной
+        # сеточной сигнатуре, и на разворотной обложке "голова к
+        # голове" (где страницы стоят "лицом друг к другу" без общего
+        # ряда/колонки — там зазор геометрией не вычислить).
+        gutter_half_pt = _find_gutter_half_pt(sig["raw_lines"])
+        if gutter_half_pt is not None:
+            half_mm = round(gutter_half_pt / _PT_PER_MM, 1)
+            info["gutter_half_mm"] = half_mm
+            info["gutter_total_mm"] = round(half_mm * 2, 1)
 
         parsed_sigs.append(info)
 
@@ -1374,10 +1386,8 @@ class ImpositionPage(ctk.CTkFrame):
             details = []
             if sig["pages"] is not None:
                 details.append(f"{sig['pages']} стр.")
-            if sig["clapan_mm"] is not None:
-                details.append(f"Клапан: {sig['clapan_mm']} мм")
-            if sig["gutter_total_mm"] is not None:
-                details.append(f"В голове: {sig['gutter_total_mm']} мм")
+            details.append(f"Клапан: {sig['clapan_mm']} мм" if sig["clapan_mm"] is not None else "Клапан: —")
+            details.append(f"В голове: {sig['gutter_total_mm']} мм" if sig["gutter_total_mm"] is not None else "В голове: —")
             if details:
                 info_lines.append("  " + " · ".join(details))
 
