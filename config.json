@@ -4,16 +4,14 @@
   "pg_dsn": "postgresql://user:pass@localhost/impo_reader",
   "orders_root": "P:\\",
   "preps_templates": [
-    "P:\\Preps\\Templates",
+    "P:\\Preps\\Templates"
+  ],
+  "preps_templates_archive": [
     "\\\\NAS-PREPRESS\\Archives\\!!!_Preps_Templates"
   ],
   "pitstop_in": "D:\\Pitstop_\\out",
   "pitstop_log": "D:\\Pitstop_\\Log",
   "pitstop_ok": "D:\\Pitstop_\\Ok",
-  "preps_empty_templates": {
-    "saddle": "",
-    "perfect": ""
-  },
   "acrobat_path": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe",
   "preps_path": "",
   "poppler_path": "C:\\poppler\\poppler-26.02.0\\Library\\bin",

@@ -15,7 +15,10 @@ import shutil
 import subprocess
 import time
 import config
-from db.database import get_session, get_imposition, save_imposition
+from db.database import (
+    get_session, get_imposition, save_imposition,
+    get_preps_template_cache, replace_preps_template_cache,
+)
 from db.models import Order
 from binding_types import binding_code_to_label
 
@@ -124,30 +127,67 @@ def _binding_matches(order_binding_code: str, order_binding_label: str, template
     return a[:prefix_len] == b[:prefix_len] or a in b or b in a
 
 
-# Кэш "сырого" списка всех .tpl шаблонов (без фильтрации под заказ) —
-# сканирование папок из config.preps_templates рекурсивно, включая
-# сетевую NAS-папку, может занимать заметное время, поэтому не делаем
-# это заново при каждом открытии страницы "Спуск полос". Кэш живёт в
-# памяти процесса приложения (общий для всех заказов и открытий
-# страницы) и обновляется по TTL или вручную — кнопкой ↺.
+# Кэш "сырого" списка .tpl шаблонов из БЫСТРЫХ (локальных) папок
+# config.preps_templates — сканируется заново при каждом поиске (эти
+# папки меняются часто — туда сохраняются новые шаблоны), но всё
+# равно кэшируется на короткое время (TTL), чтобы не пересканировать
+# диск при каждой перерисовке списка за одно открытие страницы.
+# МЕДЛЕННЫЕ архивные папки (config.preps_templates_archive, сетевые)
+# сюда не входят — они кэшируются в БД, см. _get_archive_templates.
 _TEMPLATES_CACHE = {"data": None, "timestamp": 0.0, "dirs": None, "all_tpl_paths": []}
 _TEMPLATES_CACHE_TTL = 600  # секунд (10 минут)
 
 
+def _parse_template_record(path: str, fname: str, source_dir: str = None) -> dict:
+    """Разбирает имя файла шаблона по _TEMPLATE_RE и возвращает запись
+    в едином формате, общем и для "быстрого" скана, и для архивного
+    кэша из БД — чтобы дальнейшая фильтрация (_scan_preps_templates)
+    не зависела от источника. Возвращает None, если имя не подходит
+    под схему "номер_название_формат_бумага_скрепление.tpl"."""
+    m = _TEMPLATE_RE.match(fname)
+    if not m:
+        return None
+    try:
+        tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
+    except ValueError:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    return {
+        "fname": fname,
+        "path": path,
+        "source_dir": source_dir or os.path.dirname(path),
+        "order_num": m.group("order"),
+        "name": m.group("name"),
+        "trim_w": tw,
+        "trim_h": th,
+        "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
+        "binding": m.group("binding"),
+        "mtime": mtime,
+        "year": datetime.fromtimestamp(mtime).year if mtime else None,
+    }
+
+
 def _scan_all_templates(dirs, force: bool = False) -> list:
     """
-    Рекурсивно сканирует все папки из dirs (включая вложенные
-    подпапки) и возвращает список ВСЕХ .tpl-файлов с разобранными из
-    имени параметрами — без фильтрации под конкретный заказ. Результат
-    кэшируется на _TEMPLATES_CACHE_TTL секунд; force=True заставляет
-    пересканировать сейчас же (используется кнопкой ↺ "Обновить").
+    Рекурсивно сканирует БЫСТРЫЕ (локальные) папки шаблонов из dirs
+    (включая вложенные подпапки) и возвращает список ВСЕХ .tpl-файлов
+    с разобранными из имени параметрами — без фильтрации под
+    конкретный заказ. Результат кэшируется на _TEMPLATES_CACHE_TTL
+    секунд; force=True заставляет пересканировать сейчас же
+    (используется кнопкой ↺ "Обновить").
 
-    Заодно (в том же проходе по диску/сети) запоминает пути ВСЕХ .tpl
-    файлов, включая те, что не подходят под формат имени
-    "номер_название_формат_бумага_скрепление.tpl" — например, пустые
-    шаблоны-заготовки ("пустой шаблон Saddle Stitched.tpl" и т.п.),
-    используемые как основа при создании нового шаблона (см.
+    Заодно (в том же проходе по диску) запоминает пути ВСЕХ .tpl
+    файлов, включая те, что не подходят под формат имени — например,
+    пустые шаблоны-заготовки ("пустой шаблон Saddle Stitched.tpl" и
+    т.п.), используемые как основа при создании нового шаблона (см.
     _find_base_template).
+
+    ВАЖНО: сюда передаются только "быстрые" папки (config.preps_
+    templates) — медленный сетевой архив (config.preps_templates_
+    archive) сканируется отдельно и вручную, см. _rescan_archive_to_db.
     """
     now = time.monotonic()
     dirs_key = tuple(dirs)
@@ -178,34 +218,13 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
                 path = os.path.join(root, fname)
                 all_tpl_paths.append(path)
 
-                m = _TEMPLATE_RE.match(fname)
-                if not m:
-                    continue
-                try:
-                    tw, th = int(m.group("trim_w")), int(m.group("trim_h"))
-                except ValueError:
-                    continue
-
                 if path in seen_paths:
                     continue
                 seen_paths.add(path)
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    mtime = 0
-                all_templates.append({
-                    "fname": fname,
-                    "path": path,
-                    "source_dir": d,
-                    "order_num": m.group("order"),
-                    "name": m.group("name"),
-                    "trim_w": tw,
-                    "trim_h": th,
-                    "paper": f"{m.group('paper_w')}x{m.group('paper_h')}",
-                    "binding": m.group("binding"),
-                    "mtime": mtime,
-                    "year": datetime.fromtimestamp(mtime).year if mtime else None,
-                })
+
+                record = _parse_template_record(path, fname, source_dir=d)
+                if record:
+                    all_templates.append(record)
 
     # Сначала новые — по дате изменения файла шаблона (убывание)
     all_templates.sort(key=lambda r: r["mtime"], reverse=True)
@@ -217,33 +236,132 @@ def _scan_all_templates(dirs, force: bool = False) -> list:
     return all_templates
 
 
+def _rescan_archive_to_db(dirs) -> int:
+    """
+    Полностью пересканирует МЕДЛЕННЫЕ (сетевые) архивные папки
+    шаблонов (config.preps_templates_archive) и заменяет содержимое
+    таблицы preps_template_cache в БД новым списком. Вызывается
+    ТОЛЬКО вручную (кнопка "Обновить архив шаблонов") — не при
+    обычном поиске, т.к. это может быть медленно (сеть). Возвращает
+    количество найденных шаблонов.
+    """
+    records = []
+    for d in dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            walker = os.walk(d)
+        except Exception:
+            continue
+        for root, _subdirs, files in walker:
+            for fname in files:
+                if not fname.lower().endswith(".tpl"):
+                    continue
+                path = os.path.join(root, fname)
+                record = _parse_template_record(path, fname, source_dir=d)
+                if record:
+                    records.append(record)
+
+    db_records = [
+        {
+            "path": r["path"], "fname": r["fname"],
+            "order_num": r["order_num"], "name": r["name"],
+            "trim_w": r["trim_w"], "trim_h": r["trim_h"],
+            "paper": r["paper"], "binding": r["binding"],
+            "mtime": r["mtime"],
+        }
+        for r in records
+    ]
+    replace_preps_template_cache(db_records)
+    return len(records)
+
+
+def _get_archive_templates() -> list:
+    """
+    Возвращает список шаблонов из архивного кэша в БД (см.
+    PrepsTemplateCache / _rescan_archive_to_db), в ТОМ ЖЕ формате,
+    что и _scan_all_templates — чтобы фильтрация под заказ
+    (_scan_preps_templates) не зависела от источника. НЕ обращается
+    к диску/сети — только к БД, поэтому быстро всегда.
+    """
+    rows = get_preps_template_cache()
+    result = []
+    for row in rows:
+        year = None
+        if row.mtime:
+            try:
+                year = datetime.fromtimestamp(row.mtime).year
+            except (OSError, OverflowError, ValueError):
+                year = None
+        result.append({
+            "fname": row.fname,
+            "path": row.path,
+            "source_dir": os.path.dirname(row.path),
+            "order_num": row.order_num,
+            "name": row.name,
+            "trim_w": row.trim_w,
+            "trim_h": row.trim_h,
+            "paper": row.paper,
+            "binding": row.binding,
+            "mtime": row.mtime or 0,
+            "year": year,
+            "from_archive": True,
+        })
+    return result
+
+
 def _scan_preps_templates(order, force: bool = False) -> list:
     """
-    Фильтрует закэшированный список .tpl-шаблонов Preps (см.
-    _scan_all_templates — там же живёт сканирование диска/сети) под
-    обрезной формат и тип скрепления заказа. force=True — обновить
-    кэш перед фильтрацией (кнопка ↺).
+    Ищет .tpl-шаблоны Preps, подходящие под обрезной формат и тип
+    скрепления заказа — из двух источников:
+      • "быстрые" папки (config.preps_templates) — сканируются с
+        диска напрямую (см. _scan_all_templates), force=True
+        пересканирует сейчас же (кнопка ↺);
+      • "архивные" папки (config.preps_templates_archive) — берутся
+        из кэша в БД (см. _get_archive_templates), диск/сеть НЕ
+        трогаются (обновляется отдельной кнопкой "Обновить архив").
+
+    Если с учётом скрепления ничего не нашлось — повторяем поиск
+    только по обрезному формату (без учёта скрепления), чтобы не
+    оставлять пользователя совсем без вариантов.
     """
     if not order or not order.width or not order.height:
         return []
 
-    dirs = config.CFG.get("preps_templates", [])
+    live_dirs = config.CFG.get("preps_templates", [])
     trim_pair = {int(order.width), int(order.height)}
     binding_code  = order.binding or ""
     binding_label = binding_code_to_label(order.binding) if order.binding else ""
 
-    all_templates = _scan_all_templates(dirs, force=force)
+    live_templates = _scan_all_templates(live_dirs, force=force)
+    archive_templates = _get_archive_templates()
 
-    results = []
-    for tpl in all_templates:
-        if {tpl["trim_w"], tpl["trim_h"]} != trim_pair:
-            continue
-        if binding_code and not _binding_matches(binding_code, binding_label, tpl["binding"]):
-            continue
-        item = dict(tpl)
-        item["trim"] = f"{tpl['trim_w']}x{tpl['trim_h']}"
-        results.append(item)
+    seen_paths = set()
 
+    def _filter(require_binding: bool) -> list:
+        out = []
+        for tpl in (live_templates + archive_templates):
+            if {tpl["trim_w"], tpl["trim_h"]} != trim_pair:
+                continue
+            if require_binding and binding_code and not _binding_matches(binding_code, binding_label, tpl["binding"]):
+                continue
+            path = tpl["path"]
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            item = dict(tpl)
+            item["trim"] = f"{tpl['trim_w']}x{tpl['trim_h']}"
+            out.append(item)
+        return out
+
+    results = _filter(require_binding=True)
+    if not results:
+        # Запасной вариант — искать только по обрезному формату,
+        # без учёта скрепления (см. описание метода).
+        seen_paths.clear()
+        results = _filter(require_binding=False)
+
+    results.sort(key=lambda r: r["mtime"], reverse=True)
     return results
 
 
@@ -1079,7 +1197,13 @@ class ImpositionPage(ctk.CTkFrame):
             font=("JetBrains Mono", 12),
             fg_color=("gray80","gray25"), hover_color=DARK_BD2,
             command=lambda: self._refresh_templates(force=True),
-        ).pack(side="right", padx=10, pady=6)
+        ).pack(side="right", padx=(4, 10), pady=6)
+        ctk.CTkButton(
+            hdr, text="🗄 Архив", width=76, height=24,
+            font=("JetBrains Mono", 10),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            command=self._refresh_archive_cache,
+        ).pack(side="right", padx=(4, 0), pady=6)
 
         # ── "Создать шаблон" / панель активного черновика — включает
         # название нового шаблона и (под ним) инфо о заказе, по
@@ -1127,8 +1251,9 @@ class ImpositionPage(ctk.CTkFrame):
             return
 
         draft = self._tpl_draft
+        is_editing = bool(draft.get("editing_existing_path"))
         ctk.CTkLabel(
-            self._draft_frame, text="ЧЕРНОВИК ШАБЛОНА",
+            self._draft_frame, text=("РЕДАКТИРОВАНИЕ ШАБЛОНА" if is_editing else "ЧЕРНОВИК ШАБЛОНА"),
             font=("JetBrains Mono", 9, "bold"), text_color=("gray25","gray80"), anchor="w",
         ).pack(fill="x", padx=10, pady=(10, 0))
         ctk.CTkLabel(
@@ -1281,8 +1406,47 @@ class ImpositionPage(ctk.CTkFrame):
         ).pack(side="right", fill="x", expand=True, padx=(6, 0))
 
     def _start_new_template_draft(self, filename: str, base_path: str):
-        self._tpl_draft = {"filename": filename, "base_path": base_path, "signatures": []}
+        self._tpl_draft = {
+            "filename": filename, "base_path": base_path, "signatures": [],
+            "editing_existing_path": None,
+        }
         self._render_draft_bar()
+
+    def _edit_existing_template(self, path: str):
+        """
+        Загружает СУЩЕСТВУЮЩИЙ шаблон целиком в черновик — все его
+        сигнатуры появляются в панели черновика, их можно удалить
+        (✕), можно добавить чужие сигнатуры из других шаблонов
+        (кнопка "+"), а по "💾 Сохранить" по умолчанию перезаписывается
+        тот же файл (можно сохранить и в другое место — диалог
+        сохранения это позволяет). См. п.5.
+        """
+        if self._tpl_draft and self._tpl_draft["signatures"]:
+            if not messagebox.askyesno(
+                "Редактировать шаблон",
+                "Текущий черновик будет заменён содержимым выбранного\n"
+                "шаблона. Продолжить?"
+            ):
+                return
+
+        _header, sigs = _parse_tpl_file(path, force=True)
+        if not sigs:
+            messagebox.showwarning(
+                "Редактировать шаблон",
+                "Не удалось прочитать сигнатуры этого файла — возможно,\n"
+                "формат не распознан."
+            )
+            return
+
+        fname = os.path.basename(path)
+        self._tpl_draft = {
+            "filename": fname,
+            "base_path": path,
+            "signatures": [{"sig": s, "source_fname": fname} for s in sigs],
+            "editing_existing_path": path,
+        }
+        self._render_draft_bar()
+        self._status_lbl.configure(text=f"Редактирование: {fname}", text_color=ACCENT_TEXT)
 
     def _add_signature_to_draft(self, sig: dict, source_fname: str):
         if self._tpl_draft is None:
@@ -1306,7 +1470,7 @@ class ImpositionPage(ctk.CTkFrame):
 
     def _cancel_template_draft(self):
         if self._tpl_draft and self._tpl_draft["signatures"]:
-            if not messagebox.askyesno("Отменить черновик", "Отменить создание шаблона? Добавленные сигнатуры будут потеряны."):
+            if not messagebox.askyesno("Отменить черновик", "Отменить черновик? Несохранённые изменения будут потеряны."):
                 return
         self._tpl_draft = None
         self._render_draft_bar()
@@ -1316,12 +1480,24 @@ class ImpositionPage(ctk.CTkFrame):
         if not draft or not draft["signatures"]:
             return
 
-        dirs = [d for d in config.CFG.get("preps_templates", []) if d and os.path.isdir(d)]
-        default_dir = dirs[0] if dirs else os.path.dirname(draft["base_path"])
+        editing_path = draft.get("editing_existing_path")
+        if editing_path:
+            # Редактирование существующего шаблона — по умолчанию
+            # сохраняем поверх того же файла (можно выбрать другое
+            # место через тот же диалог "Сохранить как").
+            default_dir = os.path.dirname(editing_path)
+            default_fname = os.path.basename(editing_path)
+            title = "Сохранить отредактированный шаблон Preps"
+        else:
+            dirs = [d for d in config.CFG.get("preps_templates", []) if d and os.path.isdir(d)]
+            default_dir = dirs[0] if dirs else os.path.dirname(draft["base_path"])
+            default_fname = draft["filename"]
+            title = "Сохранить новый шаблон Preps"
+
         save_path = filedialog.asksaveasfilename(
-            title="Сохранить новый шаблон Preps",
+            title=title,
             initialdir=default_dir,
-            initialfile=draft["filename"],
+            initialfile=default_fname,
             defaultextension=".tpl",
             filetypes=[("Шаблоны Preps", "*.tpl")],
         )
@@ -1341,10 +1517,13 @@ class ImpositionPage(ctk.CTkFrame):
 
         self._tpl_draft = None
         self._render_draft_bar()
-        self._status_lbl.configure(text=f"✓ Шаблон сохранён: {os.path.basename(save_path)}", text_color=ACCENT_TEXT)
-        # Новый файл появился на диске — обновляем список (форс,
-        # чтобы он сразу попал в кэш и в список, если формат/скрепление
-        # заказа совпадают)
+        verb = "обновлён" if editing_path else "сохранён"
+        self._status_lbl.configure(text=f"✓ Шаблон {verb}: {os.path.basename(save_path)}", text_color=ACCENT_TEXT)
+        # Новый/изменённый файл на диске — обновляем список (форс,
+        # чтобы попал в кэш и в список, если формат/скрепление заказа
+        # совпадают). Если файл был в архиве — его придётся отдельно
+        # пересканировать кнопкой "🗄 Архив" (кэш архива не трогаем
+        # автоматически).
         self._refresh_templates(force=True)
 
     def _render_template_signatures(self, container, path: str):
@@ -1358,6 +1537,18 @@ class ImpositionPage(ctk.CTkFrame):
 
         for w in container.winfo_children():
             w.destroy()
+
+        # "Редактировать этот шаблон" — загружает ВСЕ сигнатуры этого
+        # файла в черновик (можно убрать ненужные, добавить чужие, и
+        # сохранить — по умолчанию поверх того же файла). См. п.5.
+        edit_row = ctk.CTkFrame(container, fg_color="transparent")
+        edit_row.pack(fill="x", padx=8, pady=(6, 2))
+        ctk.CTkButton(
+            edit_row, text="✎  Редактировать этот шаблон", font=("JetBrains Mono", 10, "bold"),
+            fg_color=("gray75","gray28"), hover_color=DARK_BD2, text_color=("gray10","white"),
+            height=26,
+            command=lambda p=path: self._edit_existing_template(p),
+        ).pack(fill="x")
 
         if not signatures:
             ctk.CTkLabel(
@@ -1382,29 +1573,94 @@ class ImpositionPage(ctk.CTkFrame):
             )
             add_btn.pack(side="right", padx=8, pady=6)
 
-            info_lines = [f"▪ {sig['name'] or '(без имени)'}"]
+            text_col = ctk.CTkFrame(row, fg_color="transparent")
+            text_col.pack(side="left", padx=(8, 4), pady=6, fill="x", expand=True)
+
+            ctk.CTkLabel(
+                text_col, text=f"▪ {sig['name'] or '(без имени)'}",
+                font=("JetBrains Mono", 10, "bold"),
+                text_color=("gray10","white"), justify="left", anchor="w",
+            ).pack(fill="x", anchor="w")
+
             details = []
             if sig["pages"] is not None:
                 details.append(f"{sig['pages']} стр.")
             details.append(f"Клапан: {sig['clapan_mm']} мм" if sig["clapan_mm"] is not None else "Клапан: —")
             details.append(f"В голове: {sig['gutter_total_mm']} мм" if sig["gutter_total_mm"] is not None else "В голове: —")
-            if details:
-                info_lines.append("  " + " · ".join(details))
-
             ctk.CTkLabel(
-                row, text="\n".join(info_lines), font=("JetBrains Mono", 10),
+                text_col, text="  " + " · ".join(details), font=("JetBrains Mono", 10),
                 text_color=("gray20","gray85"), justify="left", anchor="w",
-            ).pack(side="left", padx=(8, 4), pady=6, fill="x", expand=True)
+            ).pack(fill="x", anchor="w")
+
+    def _refresh_archive_cache(self):
+        """
+        Кнопка "🗄 Архив" — пересканирует МЕДЛЕННУЮ сетевую папку(и)
+        из config.preps_templates_archive и обновляет кэш в БД (см.
+        _rescan_archive_to_db). Архив обновляется примерно раз в
+        полгода, поэтому это отдельное явное действие, а не часть
+        обычного обновления списка (кнопка ↺).
+        """
+        archive_dirs = [d for d in config.CFG.get("preps_templates_archive", []) if d]
+        if not archive_dirs:
+            messagebox.showinfo(
+                "Обновить архив шаблонов",
+                "В config.json не заданы папки preps_templates_archive — обновлять нечего."
+            )
+            return
+
+        missing = [d for d in archive_dirs if not os.path.isdir(d)]
+        if missing:
+            messagebox.showwarning(
+                "Обновить архив шаблонов",
+                "Недоступны папки архива:\n" + "\n".join(missing)
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Обновить архив шаблонов",
+            "Пересканировать архив шаблонов Preps на сервере?\n"
+            "Это сетевая папка — может занять некоторое время."
+        ):
+            return
+
+        for w in self.templates_list.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.templates_list, text="Сканирую архив шаблонов на сервере…\nЭто может занять некоторое время.",
+            font=("JetBrains Mono", 11), text_color=("gray25","gray80"), justify="left",
+        ).pack(anchor="w", padx=12, pady=12)
+
+        def worker():
+            try:
+                count = _rescan_archive_to_db(archive_dirs)
+                error = None
+            except Exception as e:
+                count = 0
+                error = str(e)
+            self.after(0, lambda: self._on_archive_rescanned(count, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_archive_rescanned(self, count: int, error: str):
+        if error:
+            messagebox.showerror("Обновить архив шаблонов", f"Не удалось обновить архив:\n{error}")
+        else:
+            self._status_lbl.configure(
+                text=f"✓ Архив шаблонов обновлён: найдено {count}", text_color=ACCENT_TEXT
+            )
+        self._refresh_templates(force=False)
 
     def _refresh_templates(self, force: bool = False):
         if not hasattr(self, "templates_list"):
             return
 
         if force:
-            # Принудительное обновление (кнопка ↺) может пересканировать
-            # медленную сетевую папку — делаем это в фоновом потоке,
-            # чтобы не подвешивать интерфейс, и показываем статус, пока
-            # идёт сканирование.
+            # Принудительное обновление (кнопка ↺) пересканирует
+            # быстрые локальные папки (config.preps_templates) —
+            # делаем это в фоновом потоке на случай временных
+            # задержек диска, и показываем статус, пока идёт
+            # сканирование. Архивные (сетевые) папки сюда не входят —
+            # они берутся из кэша в БД, см. "🗄 Архив" / _refresh_archive_cache.
             for w in self.templates_list.winfo_children():
                 w.destroy()
             ctk.CTkLabel(
@@ -1482,7 +1738,8 @@ class ImpositionPage(ctk.CTkFrame):
             text_col.pack(side="left", fill="x", expand=True)
 
             name_lbl = ctk.CTkLabel(
-                text_col, text=tpl["fname"], font=("JetBrains Mono", 12, "bold"),
+                text_col, text=("🗄 " if tpl.get("from_archive") else "") + tpl["fname"],
+                font=("JetBrains Mono", 12, "bold"),
                 text_color=ACCENT_TEXT, anchor="w", justify="left", wraplength=230,
                 cursor="hand2",
             )

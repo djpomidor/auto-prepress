@@ -131,3 +131,34 @@ def save_imposition(order_id: int, **fields):
         return imp
     finally:
         session.close()
+
+
+def get_preps_template_cache() -> list:
+    """Возвращает все закэшированные записи архивных шаблонов Preps
+    (см. PrepsTemplateCache — заполняется вручную, см.
+    replace_preps_template_cache)."""
+    from db.models import PrepsTemplateCache
+    session = get_session()
+    try:
+        return session.query(PrepsTemplateCache).all()
+    finally:
+        session.close()
+
+
+def replace_preps_template_cache(records: list):
+    """
+    Полностью заменяет кэш архивных шаблонов Preps новым списком
+    словарей (каждый — поля модели PrepsTemplateCache). Архив
+    обновляется редко (примерно раз в полгода), поэтому
+    пересканирование выполняется вручную по кнопке, а не при каждом
+    открытии страницы "Спуск полос".
+    """
+    from db.models import PrepsTemplateCache
+    session = get_session()
+    try:
+        session.query(PrepsTemplateCache).delete()
+        for r in records:
+            session.add(PrepsTemplateCache(**r))
+        session.commit()
+    finally:
+        session.close()

@@ -174,6 +174,40 @@ class Imposition(Base):
         return f"<Imposition order_id={self.order_id}>"
 
 
+class PrepsTemplateCache(Base):
+    """
+    Кэш метаданных шаблонов Preps из МЕДЛЕННОЙ (сетевой, архивной)
+    папки шаблонов — чтобы не сканировать её по сети при каждом
+    поиске подходящего шаблона. Обновляется вручную (кнопка
+    "Обновить архив шаблонов" на странице "Спуск полос"), а не
+    автоматически — архив меняется редко (примерно раз в полгода).
+
+    Папки из config.preps_templates (быстрый локальный диск,
+    например P:\\Preps\\Templates) в эту таблицу НЕ попадают —
+    они по-прежнему сканируются напрямую при каждом поиске, как и
+    раньше, т.к. туда часто сохраняются новые шаблоны и кэш быстро
+    бы устаревал.
+    """
+    __tablename__ = "preps_template_cache"
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    path      = Column(String(512), nullable=False, unique=True)
+    fname     = Column(String(256), nullable=False)
+
+    # Поля, разобранные из имени файла (см. imposition_page._TEMPLATE_RE)
+    order_num = Column(String(16),  nullable=True)
+    name      = Column(String(128), nullable=True)
+    trim_w    = Column(Integer,     nullable=True)
+    trim_h    = Column(Integer,     nullable=True)
+    paper     = Column(String(32),  nullable=True)
+    binding   = Column(String(32),  nullable=True)
+
+    mtime     = Column(Float,    nullable=True)  # дата изменения файла на момент скана
+    scanned   = Column(DateTime, nullable=False, default=datetime.now)  # когда был сделан скан
+
+    def __repr__(self):
+        return f"<PrepsTemplateCache {self.fname}>"
+
+
 class PrintSchedule(Base):
     __tablename__ = "printery_printschedule"
     id                  = Column(Integer, primary_key=True, autoincrement=True)
