@@ -51,9 +51,24 @@ def read_spec(path: str) -> dict:
     text = _extract_text(path)
     is_pdf = (ext == ".pdf") and len(text.strip()) > 50
     cleaned = _clean(text, is_pdf=is_pdf)
-    data = _parse(cleaned)
+
+    if _is_eksmo_aip_format(cleaned):
+        data = _parse_eksmo_aip(cleaned)
+    else:
+        data = _parse(cleaned)
+
     data["raw_text"] = text
     return data
+
+
+def _is_eksmo_aip_format(text: str) -> bool:
+    """Новый тип бланка — 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' от ЭКСМО в типографию
+    (не 'Спецификация заказа №', как в стандартном бланке типографии).
+    Определяем по паре характерных фраз, которые в стандартном бланке
+    не встречаются."""
+    has_title  = re.search(r"специфи[кк]аци[яи]\s+для\s+печати", text, re.I)
+    has_typog  = re.search(r"в\s+типографию\s+\S", text, re.I)
+    return bool(has_title and has_typog)
 
 
 # ─── ИЗВЛЕЧЕНИЕ ТЕКСТА ───────────────────────────────────────────
@@ -159,6 +174,47 @@ def _ocr_image(path: str) -> str:
     if w < 1800:
         scale = 1800 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # Обрезаем лишний фон вокруг листа (стол, тени и т.п.) — актуально
+    # прежде всего для фото с телефона (не для чистых сканов), но не
+    # вредит и им.
+    img = _autocrop(img)
+
+    # Быстрый пробный OCR всего листа целиком — нужен ТОЛЬКО чтобы
+    # понять, с каким именно типом бланка имеем дело, до того как
+    # решать, как именно резать картинку под конкретные поля (разметка
+    # полей у бланков разная, см. _ocr_image_standard/_eksmo_aip).
+    probe_cfg = r"--oem 3 --psm 6"
+    probe_text = pytesseract.image_to_string(img, lang="rus+eng", config=probe_cfg)
+
+    if _is_eksmo_aip_format(probe_text):
+        return _ocr_image_eksmo_aip(img, path)
+    return _ocr_image_standard(img, path)
+
+
+def _ocr_image_eksmo_aip(img, path: str) -> str:
+    """OCR нового бланка 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' (ЭКСМО → типография).
+
+    В отличие от старого бланка тут НЕ нужно вырезать отдельную ячейку
+    с номером заказа под пристальным прицелом — в этом бланке поле
+    '№ Заказа в типографии' изначально пустое и не распознаётся (см.
+    _parse_eksmo_aip — заполняется вручную), поэтому просто чистим
+    линии таблиц и распознаём лист целиком одним проходом."""
+    import pytesseract
+    ocr_cfg = r"--oem 3 --psm 6"
+    clean_img = remove_table_borders(img)
+    text = pytesseract.image_to_string(clean_img, lang="rus+eng", config=ocr_cfg)
+    _save_debug(clean_img, path)
+    print(f"[OCR] Бланк ЭКСМО-АИП, тело (первые 300):\n{text[:300]}\n---")
+    return text
+
+
+def _ocr_image_standard(img, path: str) -> str:
+    """OCR обычного (стандартного) бланка типографии — 'Спецификация
+    заказа №'. Требует точечной вырезки ячейки с номером заказа, т.к.
+    рядом с ней в шапке находится логотип, мешающий распознаванию."""
+    import pytesseract
+    from PIL import Image
 
     ocr_cfg = r"--oem 3 --psm 6"
 
@@ -531,6 +587,162 @@ def _parse(text: str) -> dict:
     d["due_date"]      = _find_date(text, r"дата\s+в\s+печать")
     d["delivery_date"] = _find_date(text, r"дата\s+сдачи\s+тиража")
     d["submit_date"]   = _find_date(text, r"дата\s+сдачи\s+материалов")
+
+    return d
+
+
+def _parse_eksmo_aip(text: str) -> dict:
+    """
+    Парсер нового типа бланка — 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' (ЭКСМО → типография,
+    напр. РостБалт). Структура принципиально другая: это не заказ клиента
+    типографии, а задание от издательства ЭКСМО в типографию, поэтому многие
+    поля этого бланка не совпадают по смыслу с обычным ("Заказчик",
+    "Описание заказа" и т.п. тут просто нет).
+
+    Решения по неоднозначным полям (см. чат):
+      • "number" (№ заказа) намеренно НЕ заполняется — в бланке этого поля
+        нет ("№ Заказа в типографии" оставлено пустым для типографии),
+        пользователь вводит его вручную после распознавания.
+      • "client" — жёстко "ЭКСМО" (само слово есть только в логотипе-
+        картинке, распознать из текстового слоя нельзя).
+      • "description" — берём из поля "Серия".
+      • Всё, что не влезает в текущие поля формы (Особые условия, Каптал,
+        Тип корешка, Автор, Серия, код ITD, ISBN, Технолог, дата бланка) —
+        сводится одним блоком в "tech_notes", чтобы не терять информацию.
+    """
+    from binding_types import normalize_binding_label
+
+    d = {}
+
+    d["client"] = "ЭКСМО"
+
+    # ── Серия / Автор / Название ─────────────────────────────────
+    m = re.search(r"Серия\s+(.+?)(?:\n|$)", text, re.I)
+    series = m.group(1).strip() if m else None
+    d["description"] = series[:64] if series else None
+
+    # [^\S\n] (не \s!) — иначе при ПУСТОМ поле "Автор" (бывает, если автор
+    # не указан) regex перепрыгивает через перевод строки и захватывает
+    # содержимое следующего поля ("Название ...") как имя автора.
+    m = re.search(r"Автор[^\S\n]*(\S.*?)(?:\n|$)", text, re.I)
+    author = m.group(1).strip() if m else None
+
+    m = re.search(r"Название[^\S\n]*(\S.*?)(?:\n|$)", text, re.I)
+    d["name"] = m.group(1).strip()[:120] if m else None
+
+    # ── Объём в печатных листах / Тираж / Переплёт ───────────────
+    m = re.search(r"Объ[её]м\s+в\s+печатных\s+листах\s+([\d.,]+)", text, re.I)
+    sheets = m.group(1).strip() if m else None
+
+    m = re.search(r"Тираж\s+([\d\s]+)\s*экз", text, re.I)
+    d["circulation"] = int(re.sub(r"\s", "", m.group(1))) if m else None
+
+    m = re.search(r"Переплет\s+(.+?)(?:\n|$)", text, re.I)
+    raw_binding = m.group(1).strip() if m else ""
+    d["binding"] = normalize_binding_label(raw_binding) if raw_binding else None
+
+    # ── Формат (реальный размер после обрезки, НЕ "Формат издания",
+    #    который является долей бумажного листа, напр. 72x104/16) ──
+    m = re.search(r"Блок\s+(\d{2,4})x(\d{2,4})\s*мм", text, re.I)
+    if m:
+        d["width"], d["height"] = int(m.group(1)), int(m.group(2))
+    else:
+        d["width"] = d["height"] = None
+
+    # ── Красочность блока ─────────────────────────────────────────
+    m = re.search(r"Блок\s+текста\s+(\d\s*\+\s*\d)(?!\s*\()", text, re.I)
+    d["color_block"] = re.sub(r"\s", "", m.group(1)) if m else None
+
+    # ── Бумага блока (строка "п/о ... мм, бумага <тип> <плотность>") ─
+    m = re.search(r"п/о[^\n]*?,\s*бумага\s+(.+?)\s+(\d{2,3})\b", text, re.I)
+    d["paper_block"] = f"{m.group(1).strip()}. {m.group(2)}" if m else None
+
+    # ── Обложка: красочность + отделка (целлофанирование и т.п.) ──
+    m = re.search(r"Обложка\s+(\d\s*\+\s*\d)\s*;\s*(.+?)(?:\n|$)", text, re.I)
+    finishing = None
+    if m:
+        d["color_cover"] = re.sub(r"\s", "", m.group(1))
+        finishing = m.group(2).strip()
+    else:
+        d["color_cover"] = None
+    d["lak"] = finishing[:32] if finishing else None
+
+    # ── Бумага/картон обложки — следующая строка после "Обложка ..;.." ─
+    d["paper_cover"] = None
+    if m:
+        rest = text[m.end():]
+        m2 = re.search(r"^\s*(.+?)(?:\n|$)", rest)
+        if m2:
+            cover_material = m2.group(1).strip()
+            cover_material = re.sub(r"^бумага\s+", "", cover_material, flags=re.I)
+            d["paper_cover"] = cover_material[:64]
+
+    d["color_insert"] = None
+    d["paper_insert"] = None
+    d["pages_insert"] = None
+
+    # ── Каптал / Тип корешка ────────────────────────────────────────
+    m = re.search(r"Каптал\s+(.+?)\s+Тип\s+корешка\s+(.+?)(?:\n|$)", text, re.I)
+    captal = spine_type = None
+    if m:
+        captal, spine_type = m.group(1).strip(), m.group(2).strip()
+    d["spine_thickness"] = None  # в этом бланке толщина корешка не указывается
+
+    # ── Объём блока (кол-во страниц) — "Блок текста (56 стр.)" ──────
+    m = re.search(r"Блок\s+текста\s*\((\d+)\s*стр", text, re.I)
+    d["pages_block"] = int(m.group(1)) if m else None
+    d["pages_cover"] = None  # явно не указано в бланке
+
+    # ── Особые условия (многострочный блок до "МАТЕРИАЛЫ") ─────────
+    # Ищем границы отдельно (а не одним regex с "\nМАТЕРИАЛЫ") — при OCR
+    # со скана/фото перед словом "МАТЕРИАЛЫ" часто прилипает мусор
+    # (напр. "___ МАТЕРИАЛЫ"), из-за чего "\n" сразу перед ним не находится.
+    special = None
+    m_start = re.search(r"Особые\s+условия[^\S\n]*", text, re.I)
+    if m_start:
+        start = m_start.end()
+        m_end = re.search(r"МАТЕРИАЛЫ", text[start:], re.I)
+        end = start + m_end.start() if m_end else len(text)
+        special = re.sub(r"\s*\n\s*", " ", text[start:end]).strip()
+        special = special or None
+
+    # ── Служебные идентификаторы (ITD-код, ISBN) ────────────────────
+    m = re.search(r"\b(ITD\d+)\b", text)
+    itd_code = m.group(1) if m else None
+
+    m = re.search(r"\b(97[89][\d\-]{10,20}\d)\b", text)
+    isbn = m.group(1) if m else None
+
+    # ── Типография-получатель ────────────────────────────────────
+    m = re.search(r"В\s+типографию\s+(.+?)(?:\n|$)", text, re.I)
+    typography = m.group(1).strip() if m else None
+
+    # ── Технолог ──────────────────────────────────────────────────
+    m = re.search(r"Технолог\s+(.+?)(?:\n|$)", text, re.I)
+    technologist = m.group(1).strip() if m else None
+
+    # ── Даты ─────────────────────────────────────────────────────
+    d["due_date"] = _find_date(text, r"Просьба\s+изготовить\s+к")
+    d["delivery_date"] = None
+    d["submit_date"] = None
+    m = re.search(r"Просьба\s+изготовить\s+к\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+Дата\s+(\d{1,2}[./]\d{1,2}[./]\d{2,4})", text, re.I)
+    spec_date = _norm_date(m.group(1)) if m else None
+
+    # ── Собираем "Технические пояснения" ─────────────────────────
+    notes_parts = []
+    if typography:      notes_parts.append(f"В типографию: {typography}")
+    if series:           notes_parts.append(f"Серия: {series}")
+    if author:            notes_parts.append(f"Автор: {author}")
+    if sheets:            notes_parts.append(f"Объём в печ. листах: {sheets}")
+    if captal:            notes_parts.append(f"Каптал: {captal}")
+    if spine_type:        notes_parts.append(f"Тип корешка: {spine_type}")
+    if special:           notes_parts.append(f"Особые условия: {special}")
+    if itd_code:          notes_parts.append(itd_code)
+    if isbn:              notes_parts.append(f"ISBN {isbn}")
+    if technologist:      notes_parts.append(f"Технолог: {technologist}")
+    if spec_date:         notes_parts.append(f"Дата составления спецификации: {spec_date}")
+
+    d["tech_notes"] = "\n".join(notes_parts)[:1000] if notes_parts else None
 
     return d
 
