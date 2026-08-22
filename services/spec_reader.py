@@ -54,11 +54,26 @@ def read_spec(path: str) -> dict:
 
     if _is_eksmo_aip_format(cleaned):
         data = _parse_eksmo_aip(cleaned)
+        # В самом бланке номера заказа нет (поле "№ Заказа в типографии"
+        # пустое — заполняется типографией от руки). Берём его из имени
+        # файла, если оно начинается с "НННН_" (напр. "1243_eksmo_...pdf"
+        # -> 1243). Если файл назван иначе — оставляем поле пустым,
+        # как договорились, для ввода вручную.
+        data["number"] = _number_from_filename(path)
     else:
         data = _parse(cleaned)
 
     data["raw_text"] = text
     return data
+
+
+def _number_from_filename(path: str) -> int | None:
+    """Первые 4 цифры + '_' в начале имени файла -> номер заказа.
+    Например '1243_eksmo_specifikacia.pdf' -> 1243. Если имя файла не
+    начинается с этого паттерна -> None (поле остаётся пустым)."""
+    basename = os.path.basename(path)
+    m = re.match(r"^(\d{4})_", basename)
+    return int(m.group(1)) if m else None
 
 
 def _is_eksmo_aip_format(text: str) -> bool:
