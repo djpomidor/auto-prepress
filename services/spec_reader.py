@@ -606,17 +606,19 @@ def _parse_eksmo_aip(text: str) -> dict:
       • "client" — жёстко "ЭКСМО" (само слово есть только в логотипе-
         картинке, распознать из текстового слоя нельзя).
       • "description" — берём из поля "Серия".
-      • Всё, что не влезает в текущие поля формы (Особые условия, Каптал,
-        Тип корешка, Автор, Серия, код ITD, ISBN, Технолог, дата бланка) —
-        сводится одним блоком в "tech_notes", чтобы не терять информацию.
+      • "binding" — коды скрепления жёстко заданы по формулировке из
+        бланка (см. _map_eksmo_binding): "Проволока"→SKR, "Бесшвейка"→KBS,
+        "Шитье ниткой"→SHT.
+      • "tech_notes" — берём ТОЛЬКО блок, начинающийся со слов
+        "Вниманию типографии!!!" и до конца особых условий (до таблицы
+        "МАТЕРИАЛЫ"). Всё остальное (серия, автор, ITD-код, ISBN,
+        технолог, каптал и т.п.) сознательно не переносится.
     """
-    from binding_types import normalize_binding_label
-
     d = {}
 
     d["client"] = "ЭКСМО"
 
-    # ── Серия / Автор / Название ─────────────────────────────────
+    # ── Серия / Название ────────────────────────────────────────
     m = re.search(r"Серия\s+(.+?)(?:\n|$)", text, re.I)
     series = m.group(1).strip() if m else None
     d["description"] = series[:64] if series else None
@@ -624,22 +626,16 @@ def _parse_eksmo_aip(text: str) -> dict:
     # [^\S\n] (не \s!) — иначе при ПУСТОМ поле "Автор" (бывает, если автор
     # не указан) regex перепрыгивает через перевод строки и захватывает
     # содержимое следующего поля ("Название ...") как имя автора.
-    m = re.search(r"Автор[^\S\n]*(\S.*?)(?:\n|$)", text, re.I)
-    author = m.group(1).strip() if m else None
-
     m = re.search(r"Название[^\S\n]*(\S.*?)(?:\n|$)", text, re.I)
     d["name"] = m.group(1).strip()[:120] if m else None
 
-    # ── Объём в печатных листах / Тираж / Переплёт ───────────────
-    m = re.search(r"Объ[её]м\s+в\s+печатных\s+листах\s+([\d.,]+)", text, re.I)
-    sheets = m.group(1).strip() if m else None
-
+    # ── Тираж / Переплёт ───────────────────────────────────────────
     m = re.search(r"Тираж\s+([\d\s]+)\s*экз", text, re.I)
     d["circulation"] = int(re.sub(r"\s", "", m.group(1))) if m else None
 
     m = re.search(r"Переплет\s+(.+?)(?:\n|$)", text, re.I)
     raw_binding = m.group(1).strip() if m else ""
-    d["binding"] = normalize_binding_label(raw_binding) if raw_binding else None
+    d["binding"] = _map_eksmo_binding(raw_binding) if raw_binding else None
 
     # ── Формат (реальный размер после обрезки, НЕ "Формат издания",
     #    который является долей бумажного листа, напр. 72x104/16) ──
@@ -681,70 +677,56 @@ def _parse_eksmo_aip(text: str) -> dict:
     d["paper_insert"] = None
     d["pages_insert"] = None
 
-    # ── Каптал / Тип корешка ────────────────────────────────────────
-    m = re.search(r"Каптал\s+(.+?)\s+Тип\s+корешка\s+(.+?)(?:\n|$)", text, re.I)
-    captal = spine_type = None
-    if m:
-        captal, spine_type = m.group(1).strip(), m.group(2).strip()
-    d["spine_thickness"] = None  # в этом бланке толщина корешка не указывается
-
     # ── Объём блока (кол-во страниц) — "Блок текста (56 стр.)" ──────
     m = re.search(r"Блок\s+текста\s*\((\d+)\s*стр", text, re.I)
     d["pages_block"] = int(m.group(1)) if m else None
     d["pages_cover"] = None  # явно не указано в бланке
+    d["spine_thickness"] = None  # в этом бланке толщина корешка не указывается
 
-    # ── Особые условия (многострочный блок до "МАТЕРИАЛЫ") ─────────
-    # Ищем границы отдельно (а не одним regex с "\nМАТЕРИАЛЫ") — при OCR
-    # со скана/фото перед словом "МАТЕРИАЛЫ" часто прилипает мусор
-    # (напр. "___ МАТЕРИАЛЫ"), из-за чего "\n" сразу перед ним не находится.
-    special = None
-    m_start = re.search(r"Особые\s+условия[^\S\n]*", text, re.I)
-    if m_start:
-        start = m_start.end()
-        m_end = re.search(r"МАТЕРИАЛЫ", text[start:], re.I)
-        end = start + m_end.start() if m_end else len(text)
-        special = re.sub(r"\s*\n\s*", " ", text[start:end]).strip()
-        special = special or None
-
-    # ── Служебные идентификаторы (ITD-код, ISBN) ────────────────────
-    m = re.search(r"\b(ITD\d+)\b", text)
-    itd_code = m.group(1) if m else None
-
-    m = re.search(r"\b(97[89][\d\-]{10,20}\d)\b", text)
-    isbn = m.group(1) if m else None
-
-    # ── Типография-получатель ────────────────────────────────────
-    m = re.search(r"В\s+типографию\s+(.+?)(?:\n|$)", text, re.I)
-    typography = m.group(1).strip() if m else None
-
-    # ── Технолог ──────────────────────────────────────────────────
-    m = re.search(r"Технолог\s+(.+?)(?:\n|$)", text, re.I)
-    technologist = m.group(1).strip() if m else None
-
-    # ── Даты ─────────────────────────────────────────────────────
     d["due_date"] = _find_date(text, r"Просьба\s+изготовить\s+к")
     d["delivery_date"] = None
     d["submit_date"] = None
-    m = re.search(r"Просьба\s+изготовить\s+к\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+Дата\s+(\d{1,2}[./]\d{1,2}[./]\d{2,4})", text, re.I)
-    spec_date = _norm_date(m.group(1)) if m else None
 
-    # ── Собираем "Технические пояснения" ─────────────────────────
-    notes_parts = []
-    if typography:      notes_parts.append(f"В типографию: {typography}")
-    if series:           notes_parts.append(f"Серия: {series}")
-    if author:            notes_parts.append(f"Автор: {author}")
-    if sheets:            notes_parts.append(f"Объём в печ. листах: {sheets}")
-    if captal:            notes_parts.append(f"Каптал: {captal}")
-    if spine_type:        notes_parts.append(f"Тип корешка: {spine_type}")
-    if special:           notes_parts.append(f"Особые условия: {special}")
-    if itd_code:          notes_parts.append(itd_code)
-    if isbn:              notes_parts.append(f"ISBN {isbn}")
-    if technologist:      notes_parts.append(f"Технолог: {technologist}")
-    if spec_date:         notes_parts.append(f"Дата составления спецификации: {spec_date}")
-
-    d["tech_notes"] = "\n".join(notes_parts)[:1000] if notes_parts else None
+    # ── Технические пояснения — ТОЛЬКО блок "Вниманию типографии!!!"
+    #    (и то, что идёт после него — про номер заказа и тираж в
+    #    выходных данных), до таблицы "МАТЕРИАЛЫ". Всё, что раньше по
+    #    тексту (особые условия, серия, автор, ITD, ISBN, технолог,
+    #    каптал, тип корешка) — намеренно сюда не попадает.
+    d["tech_notes"] = None
+    m_start = re.search(r"Вниманию\s+типографии", text, re.I)
+    if m_start:
+        start = m_start.start()
+        m_end = re.search(r"МАТЕРИАЛЫ", text[start:], re.I)
+        end = start + m_end.start() if m_end else len(text)
+        note = re.sub(r"\s*\n\s*", " ", text[start:end]).strip()
+        d["tech_notes"] = note[:1000] if note else None
 
     return d
+
+
+def _map_eksmo_binding(raw: str) -> str | None:
+    """Скрепление для бланка ЭКСМО-АИП — по формулировке из поля 'Переплет'
+    (напр. '3, Проволока', '7БЦ, Шитье ниткой', '3, Бесшвейка').
+
+    Возвращает НАЗВАНИЕ (как и везде в интерфейсе — "скрепка" и т.п.),
+    а не код БД: код (SKR/KBS/SHT/...) проставляется автоматически при
+    сохранении через binding_types.binding_to_code(), как и для обычного
+    типа спецификаций.
+
+    "Проволока" и "Бесшвейка" — жаргон ЭКСМО, которого нет среди
+    канонических меток в binding_types.py, поэтому сопоставляем вручную.
+    "Шитье ниткой" (в любом виде — "3, Шитье ниткой", "7БЦ, Шитье
+    ниткой") сам binding_types.normalize_binding_label уже понимает
+    правильно (находит подстроку "шитье" → код SHT) — здесь просто
+    передаём ему управление, чтобы не дублировать логику."""
+    from binding_types import normalize_binding_label
+
+    low = raw.lower()
+    if "проволок" in low:
+        return "скрепка"
+    if "бесшвей" in low:
+        return "термоклей"
+    return normalize_binding_label(raw) or None
 
 
 # ─── ВСПОМОГАТЕЛЬНЫЕ ─────────────────────────────────────────────
