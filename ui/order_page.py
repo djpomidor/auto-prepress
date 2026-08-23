@@ -307,7 +307,7 @@ class OrderPage(ctk.CTkFrame):
         except Exception:
             screen_w = screen_h = None
 
-        if screen_w > 1366 and screen_h > 768:
+        if screen_w > 1400 and screen_h > 800:
             left_default_w  = 420
             right_default_w = 420
         else:
@@ -827,14 +827,14 @@ class OrderPage(ctk.CTkFrame):
                 link = ctk.CTkLabel(
                     block, text="🔗 Открыть PDF лога в Acrobat",
                     font=("JetBrains Mono", 12, "underline"),
-                    text_color=ACCENT, cursor="hand2", anchor="w",
+                    text_color=ACCENT_TEXT, cursor="hand2", anchor="w",
                 )
                 link.pack(anchor="w", padx=10, pady=(0, 6))
                 link.bind("<Button-1>", lambda e, p=rep["pdf_path"]: self._open_in_acrobat(p))
 
             body = ctk.CTkLabel(
                 block, text=rep["text"], font=("JetBrains Mono", 13),
-                text_color=TEXT, justify="left", anchor="w", wraplength=320,
+                text_color=BTN_TEXT, justify="left", anchor="w", wraplength=320,
             )
             body.pack(fill="x", padx=10, pady=(0, 12))
 
