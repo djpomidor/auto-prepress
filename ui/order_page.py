@@ -39,6 +39,23 @@ DANGER   = "#ff5555"
 SUCCESS  = "#33cc66"
 WARNING  = "#ffaa33"
 
+# ── Адаптивные цвета текста (light, dark) ───────────────────────────
+# ВАЖНО: у CTkButton дефолтный text_color задан ТЕМОЙ customtkinter как
+# ОДИНАКОВЫЙ (почти белый, "#DCE4EE") и для светлой, и для тёмной темы —
+# это рассчитано на кнопки с насыщенным (синим/зелёным) фоном. Как
+# только fg_color кнопки переопределяется на серую пару
+# ("gray8X","gray2X") — в тёмной теме текст на тёмном фоне читается
+# нормально, а в светлой получается почти белый текст на светло-сером
+# фоне — нечитаемо. Поэтому для таких кнопок текст надо задавать
+# явно и адаптивно через BTN_TEXT.
+BTN_TEXT = ("gray10", "gray90")
+
+# ACCENT (салатовый) отлично виден на тёмном фоне, но на светлом фоне
+# сайдбара (gray90) практически сливается с ним — для текста статуса
+# "распознано" в светлой теме берём тёмный оттенок того же акцента,
+# в тёмной теме — прежний ACCENT без изменений.
+ACCENT_TEXT = ("#5c7a00", ACCENT)
+
 
 def _poppler_kwargs() -> dict:
     """Путь к Poppler (pdftoppm/pdfinfo), если он не в системном PATH —
@@ -279,8 +296,23 @@ class OrderPage(ctk.CTkFrame):
             win_w = self.app.cfg.get("window_width", 1400)
         except Exception:
             win_w = 1400
-        left_default_w  = max(320, int(win_w * 0.25))
-        right_default_w = max(320, int(win_w * 0.25))
+
+        # На самом частом сейчас разрешении (1920x1080) 1/4 ширины окна
+        # маловата для формы/PitStop-панели — держим их пошире (420px)
+        # по умолчанию. На других разрешениях остаётся прежний расчёт
+        # (1/4 ширины окна).
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+        except Exception:
+            screen_w = screen_h = None
+
+        if screen_w > 1366 and screen_h > 768:
+            left_default_w  = 420
+            right_default_w = 420
+        else:
+            left_default_w  = max(320, int(win_w * 0.25))
+            right_default_w = max(320, int(win_w * 0.25))
 
         is_dark = ctk.get_appearance_mode().lower() == "dark"
         sash_bg = "#242424" if is_dark else "#d5d5d5"
@@ -340,7 +372,7 @@ class OrderPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             zoom_box, text="−", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_out,
         ).pack(side="left", padx=2)
 
@@ -351,13 +383,13 @@ class OrderPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             zoom_box, text="+", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_in,
         ).pack(side="left", padx=2)
 
         ctk.CTkButton(
             zoom_box, text="⤢ 100%", width=56, height=24, font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_reset,
         ).pack(side="left", padx=(6, 0))
 
@@ -715,7 +747,7 @@ class OrderPage(ctk.CTkFrame):
             font=("JetBrains Mono", 12),
             fg_color=("gray85","gray20"), hover_color=DARK_BD2,
              border_width=1,
-             height=36,
+             height=36, text_color=BTN_TEXT,
             command=self._open_imposition,
         )
 
@@ -739,7 +771,7 @@ class OrderPage(ctk.CTkFrame):
         ctk.CTkButton(
             hdr, text="↺ Обновить", width=90, height=24,
             font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
              command=self._refresh_pitstop
         ).pack(side="right", padx=10, pady=6)
 
@@ -788,10 +820,8 @@ class OrderPage(ctk.CTkFrame):
                 anchor="w",
             ).pack(side="left")
 
-            ctk.CTkLabel(
-                top, text=rep["fname"], font=("JetBrains Mono", 11),
-                text_color=TEXT3,
-            ).pack(side="right")
+            # Имя файла (rep["fname"]) здесь больше не дублируем — оно
+            # и так показывается строчкой ниже.
 
             if rep["pdf_path"]:
                 link = ctk.CTkLabel(
@@ -1062,7 +1092,7 @@ class OrderPage(ctk.CTkFrame):
 
         self._ocr_status.configure(
             text=f"✓  {os.path.basename(path)} — распознано. Проверьте данные.",
-            text_color=ACCENT
+            text_color=ACCENT_TEXT
         )
 
     def _ocr_error(self, msg: str):
