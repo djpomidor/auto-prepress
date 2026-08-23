@@ -12,6 +12,10 @@
   "pitstop_in": "D:\\Pitstop_\\out",
   "pitstop_log": "D:\\Pitstop_\\Log",
   "pitstop_ok": "D:\\Pitstop_\\Ok",
+  "preps_empty_templates": {
+    "saddle": "",
+    "perfect": ""
+  },
   "acrobat_path": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe",
   "preps_path": "",
   "poppler_path": "C:\\poppler\\poppler-26.02.0\\Library\\bin",
