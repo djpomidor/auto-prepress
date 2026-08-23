@@ -76,12 +76,26 @@ def list_pitstop_reports(log_dir: str) -> list:
         # (<ProcessInfo><PreflightDateTime>), это точнее, чем дата
         # изменения файла (которая "плывёт" при копировании файлов
         # между папками). Если вдруг отсутствует — берём mtime.
+        #
+        # ВАЖНО про смещение в самой строке (напр. "...+03:00"):
+        # часовой пояс Windows на машине с PitStop Server настроен
+        # ПРАВИЛЬНО (Москва, UTC+3) — проверено. Тем не менее сам
+        # PitStop Server пишет в отчёт время как будто UTC, а
+        # "+03:00" в конце — просто подставляет из настроек ОС, не
+        # пересчитывая часы. Т.е. это внутренняя ошибка самого
+        # PitStop (скорее всего берёт время через системный вызов,
+        # возвращающий UTC, а offset подписывает отдельно из ОС), а
+        # не проблема системных часов или нашего парсинга. Проверено
+        # на реальном отчёте: в файле было "10:57:44+03:00", а по
+        # факту проверка прошла в 13:57 по Москве. Поэтому смещение,
+        # указанное в файле, игнорируем и всегда прибавляем 3 часа к
+        # "сырым" часам — как для aware, так и для naive записи.
         dt = None
         dt_el = root.find(".//ProcessInfo/PreflightDateTime")
         if dt_el is not None and dt_el.text:
             try:
                 dt = datetime.datetime.fromisoformat(dt_el.text.strip())
-                dt = dt.replace(tzinfo=None)  # чтобы сравнение с naive mtime не падало
+                dt = dt.replace(tzinfo=None) + datetime.timedelta(hours=3)
             except ValueError:
                 dt = None
         if dt is None:
