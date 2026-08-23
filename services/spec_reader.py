@@ -51,9 +51,39 @@ def read_spec(path: str) -> dict:
     text = _extract_text(path)
     is_pdf = (ext == ".pdf") and len(text.strip()) > 50
     cleaned = _clean(text, is_pdf=is_pdf)
-    data = _parse(cleaned)
+
+    if _is_eksmo_aip_format(cleaned):
+        data = _parse_eksmo_aip(cleaned)
+        # В самом бланке номера заказа нет (поле "№ Заказа в типографии"
+        # пустое — заполняется типографией от руки). Берём его из имени
+        # файла, если оно начинается с "НННН_" (напр. "1243_eksmo_...pdf"
+        # -> 1243). Если файл назван иначе — оставляем поле пустым,
+        # как договорились, для ввода вручную.
+        data["number"] = _number_from_filename(path)
+    else:
+        data = _parse(cleaned)
+
     data["raw_text"] = text
     return data
+
+
+def _number_from_filename(path: str) -> int | None:
+    """Первые 4 цифры + '_' в начале имени файла -> номер заказа.
+    Например '1243_eksmo_specifikacia.pdf' -> 1243. Если имя файла не
+    начинается с этого паттерна -> None (поле остаётся пустым)."""
+    basename = os.path.basename(path)
+    m = re.match(r"^(\d{4})_", basename)
+    return int(m.group(1)) if m else None
+
+
+def _is_eksmo_aip_format(text: str) -> bool:
+    """Новый тип бланка — 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' от ЭКСМО в типографию
+    (не 'Спецификация заказа №', как в стандартном бланке типографии).
+    Определяем по паре характерных фраз, которые в стандартном бланке
+    не встречаются."""
+    has_title  = re.search(r"специфи[кк]аци[яи]\s+для\s+печати", text, re.I)
+    has_typog  = re.search(r"в\s+типографию\s+\S", text, re.I)
+    return bool(has_title and has_typog)
 
 
 # ─── ИЗВЛЕЧЕНИЕ ТЕКСТА ───────────────────────────────────────────
@@ -159,6 +189,47 @@ def _ocr_image(path: str) -> str:
     if w < 1800:
         scale = 1800 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # Обрезаем лишний фон вокруг листа (стол, тени и т.п.) — актуально
+    # прежде всего для фото с телефона (не для чистых сканов), но не
+    # вредит и им.
+    img = _autocrop(img)
+
+    # Быстрый пробный OCR всего листа целиком — нужен ТОЛЬКО чтобы
+    # понять, с каким именно типом бланка имеем дело, до того как
+    # решать, как именно резать картинку под конкретные поля (разметка
+    # полей у бланков разная, см. _ocr_image_standard/_eksmo_aip).
+    probe_cfg = r"--oem 3 --psm 6"
+    probe_text = pytesseract.image_to_string(img, lang="rus+eng", config=probe_cfg)
+
+    if _is_eksmo_aip_format(probe_text):
+        return _ocr_image_eksmo_aip(img, path)
+    return _ocr_image_standard(img, path)
+
+
+def _ocr_image_eksmo_aip(img, path: str) -> str:
+    """OCR нового бланка 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' (ЭКСМО → типография).
+
+    В отличие от старого бланка тут НЕ нужно вырезать отдельную ячейку
+    с номером заказа под пристальным прицелом — в этом бланке поле
+    '№ Заказа в типографии' изначально пустое и не распознаётся (см.
+    _parse_eksmo_aip — заполняется вручную), поэтому просто чистим
+    линии таблиц и распознаём лист целиком одним проходом."""
+    import pytesseract
+    ocr_cfg = r"--oem 3 --psm 6"
+    clean_img = remove_table_borders(img)
+    text = pytesseract.image_to_string(clean_img, lang="rus+eng", config=ocr_cfg)
+    _save_debug(clean_img, path)
+    print(f"[OCR] Бланк ЭКСМО-АИП, тело (первые 300):\n{text[:300]}\n---")
+    return text
+
+
+def _ocr_image_standard(img, path: str) -> str:
+    """OCR обычного (стандартного) бланка типографии — 'Спецификация
+    заказа №'. Требует точечной вырезки ячейки с номером заказа, т.к.
+    рядом с ней в шапке находится логотип, мешающий распознаванию."""
+    import pytesseract
+    from PIL import Image
 
     ocr_cfg = r"--oem 3 --psm 6"
 
@@ -533,6 +604,144 @@ def _parse(text: str) -> dict:
     d["submit_date"]   = _find_date(text, r"дата\s+сдачи\s+материалов")
 
     return d
+
+
+def _parse_eksmo_aip(text: str) -> dict:
+    """
+    Парсер нового типа бланка — 'СПЕЦИФИКАЦИЯ ДЛЯ ПЕЧАТИ' (ЭКСМО → типография,
+    напр. РостБалт). Структура принципиально другая: это не заказ клиента
+    типографии, а задание от издательства ЭКСМО в типографию, поэтому многие
+    поля этого бланка не совпадают по смыслу с обычным ("Заказчик",
+    "Описание заказа" и т.п. тут просто нет).
+
+    Решения по неоднозначным полям (см. чат):
+      • "number" (№ заказа) намеренно НЕ заполняется — в бланке этого поля
+        нет ("№ Заказа в типографии" оставлено пустым для типографии),
+        пользователь вводит его вручную после распознавания.
+      • "client" — жёстко "ЭКСМО" (само слово есть только в логотипе-
+        картинке, распознать из текстового слоя нельзя).
+      • "description" — берём из поля "Серия".
+      • "binding" — коды скрепления жёстко заданы по формулировке из
+        бланка (см. _map_eksmo_binding): "Проволока"→SKR, "Бесшвейка"→KBS,
+        "Шитье ниткой"→SHT.
+      • "tech_notes" — берём ТОЛЬКО блок, начинающийся со слов
+        "Вниманию типографии!!!" и до конца особых условий (до таблицы
+        "МАТЕРИАЛЫ"). Всё остальное (серия, автор, ITD-код, ISBN,
+        технолог, каптал и т.п.) сознательно не переносится.
+    """
+    d = {}
+
+    d["client"] = "ЭКСМО"
+
+    # ── Серия / Название ────────────────────────────────────────
+    m = re.search(r"Серия\s+(.+?)(?:\n|$)", text, re.I)
+    series = m.group(1).strip() if m else None
+    d["description"] = series[:64] if series else None
+
+    # [^\S\n] (не \s!) — иначе при ПУСТОМ поле "Автор" (бывает, если автор
+    # не указан) regex перепрыгивает через перевод строки и захватывает
+    # содержимое следующего поля ("Название ...") как имя автора.
+    m = re.search(r"Название[^\S\n]*(\S.*?)(?:\n|$)", text, re.I)
+    d["name"] = m.group(1).strip()[:120] if m else None
+
+    # ── Тираж / Переплёт ───────────────────────────────────────────
+    m = re.search(r"Тираж\s+([\d\s]+)\s*экз", text, re.I)
+    d["circulation"] = int(re.sub(r"\s", "", m.group(1))) if m else None
+
+    m = re.search(r"Переплет\s+(.+?)(?:\n|$)", text, re.I)
+    raw_binding = m.group(1).strip() if m else ""
+    d["binding"] = _map_eksmo_binding(raw_binding) if raw_binding else None
+
+    # ── Формат (реальный размер после обрезки, НЕ "Формат издания",
+    #    который является долей бумажного листа, напр. 72x104/16) ──
+    m = re.search(r"Блок\s+(\d{2,4})x(\d{2,4})\s*мм", text, re.I)
+    if m:
+        d["width"], d["height"] = int(m.group(1)), int(m.group(2))
+    else:
+        d["width"] = d["height"] = None
+
+    # ── Красочность блока ─────────────────────────────────────────
+    m = re.search(r"Блок\s+текста\s+(\d\s*\+\s*\d)(?!\s*\()", text, re.I)
+    d["color_block"] = re.sub(r"\s", "", m.group(1)) if m else None
+
+    # ── Бумага блока (строка "п/о ... мм, бумага <тип> <плотность>") ─
+    m = re.search(r"п/о[^\n]*?,\s*бумага\s+(.+?)\s+(\d{2,3})\b", text, re.I)
+    d["paper_block"] = f"{m.group(1).strip()}. {m.group(2)}" if m else None
+
+    # ── Обложка: красочность + отделка (целлофанирование и т.п.) ──
+    m = re.search(r"Обложка\s+(\d\s*\+\s*\d)\s*;\s*(.+?)(?:\n|$)", text, re.I)
+    finishing = None
+    if m:
+        d["color_cover"] = re.sub(r"\s", "", m.group(1))
+        finishing = m.group(2).strip()
+    else:
+        d["color_cover"] = None
+    d["lak"] = finishing[:32] if finishing else None
+
+    # ── Бумага/картон обложки — следующая строка после "Обложка ..;.." ─
+    d["paper_cover"] = None
+    if m:
+        rest = text[m.end():]
+        m2 = re.search(r"^\s*(.+?)(?:\n|$)", rest)
+        if m2:
+            cover_material = m2.group(1).strip()
+            cover_material = re.sub(r"^бумага\s+", "", cover_material, flags=re.I)
+            d["paper_cover"] = cover_material[:64]
+
+    d["color_insert"] = None
+    d["paper_insert"] = None
+    d["pages_insert"] = None
+
+    # ── Объём блока (кол-во страниц) — "Блок текста (56 стр.)" ──────
+    m = re.search(r"Блок\s+текста\s*\((\d+)\s*стр", text, re.I)
+    d["pages_block"] = int(m.group(1)) if m else None
+    d["pages_cover"] = None  # явно не указано в бланке
+    d["spine_thickness"] = None  # в этом бланке толщина корешка не указывается
+
+    d["due_date"] = _find_date(text, r"Просьба\s+изготовить\s+к")
+    d["delivery_date"] = None
+    d["submit_date"] = None
+
+    # ── Технические пояснения — ТОЛЬКО блок "Вниманию типографии!!!"
+    #    (и то, что идёт после него — про номер заказа и тираж в
+    #    выходных данных), до таблицы "МАТЕРИАЛЫ". Всё, что раньше по
+    #    тексту (особые условия, серия, автор, ITD, ISBN, технолог,
+    #    каптал, тип корешка) — намеренно сюда не попадает.
+    d["tech_notes"] = None
+    m_start = re.search(r"Вниманию\s+типографии", text, re.I)
+    if m_start:
+        start = m_start.start()
+        m_end = re.search(r"МАТЕРИАЛЫ", text[start:], re.I)
+        end = start + m_end.start() if m_end else len(text)
+        note = re.sub(r"\s*\n\s*", " ", text[start:end]).strip()
+        d["tech_notes"] = note[:1000] if note else None
+
+    return d
+
+
+def _map_eksmo_binding(raw: str) -> str | None:
+    """Скрепление для бланка ЭКСМО-АИП — по формулировке из поля 'Переплет'
+    (напр. '3, Проволока', '7БЦ, Шитье ниткой', '3, Бесшвейка').
+
+    Возвращает НАЗВАНИЕ (как и везде в интерфейсе — "скрепка" и т.п.),
+    а не код БД: код (SKR/KBS/SHT/...) проставляется автоматически при
+    сохранении через binding_types.binding_to_code(), как и для обычного
+    типа спецификаций.
+
+    "Проволока" и "Бесшвейка" — жаргон ЭКСМО, которого нет среди
+    канонических меток в binding_types.py, поэтому сопоставляем вручную.
+    "Шитье ниткой" (в любом виде — "3, Шитье ниткой", "7БЦ, Шитье
+    ниткой") сам binding_types.normalize_binding_label уже понимает
+    правильно (находит подстроку "шитье" → код SHT) — здесь просто
+    передаём ему управление, чтобы не дублировать логику."""
+    from binding_types import normalize_binding_label
+
+    low = raw.lower()
+    if "проволок" in low:
+        return "скрепка"
+    if "бесшвей" in low:
+        return "термоклей"
+    return normalize_binding_label(raw) or None
 
 
 # ─── ВСПОМОГАТЕЛЬНЫЕ ─────────────────────────────────────────────
