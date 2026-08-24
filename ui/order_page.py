@@ -640,9 +640,9 @@ class OrderPage(ctk.CTkFrame):
     # ── DROP ZONE ─────────────────────────────────────────────────
     def _build_drop_zone(self, parent):
         sec = ctk.CTkFrame(parent, fg_color="transparent")
-        sec.pack(fill="x", padx=20, pady=(20, 0))
+        sec.pack(fill="x", padx=20, pady=(10, 0))
 
-        _label(sec, "СПЕЦИФИКАЦИЯ ЗАКАЗА").pack(anchor="w", pady=(0, 6))
+        _label(sec, "СПЕЦИФИКАЦИЯ ЗАКАЗА").pack(anchor="w", pady=(0, 0))
 
         # Сама подсказка "Перетащите PDF/JPG сюда..." и сам drag-and-drop
         # теперь живут в окне ПРЕВЬЮ СПЕЦИФИКАЦИИ (центральная панель,
@@ -660,7 +660,7 @@ class OrderPage(ctk.CTkFrame):
             sec, text="Перетащите или кликните превью спецификации,\nчтобы выбрать файл",
             font=("JetBrains Mono", 10), text_color=TEXT3, justify="left", anchor="w",
         )
-        self._ocr_status.pack(anchor="w", pady=(4, 0), fill="x")
+        self._ocr_status.pack(anchor="w", pady=(0, 0), fill="x")
 
     # ── FORM ──────────────────────────────────────────────────────
     def _build_form(self, parent):
