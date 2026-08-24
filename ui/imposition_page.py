@@ -40,6 +40,13 @@ ACCENT2  = "#9bc429"
 # (fg_color=ACCENT) сам ACCENT остаётся как есть — там всегда тёмный
 # текст поверх, контраст в порядке.
 ACCENT_TEXT = ("#5c7a00", "#c8f135")
+# Тот же самый баг, что чинили на странице заказа: у CTkButton дефолтный
+# text_color ОДИНАКОВЫЙ (почти белый) и в светлой, и в тёмной теме — это
+# рассчитано на кнопки с насыщенным фоном. Как только фон кнопки
+# переопределён на серую пару ("gray8X","gray2X"/"gray9X") без явного
+# text_color — в светлой теме получается почти белый текст на светлом
+# фоне, нечитаемо. Явно проставляем адаптивный цвет через BTN_TEXT.
+BTN_TEXT = ("gray10", "gray90")
 TEXT     = "#e8e8e8"
 TEXT2    = "#888888"
 TEXT3    = "#555555"
@@ -658,6 +665,41 @@ def build_template_filename(order, press_format: str, binding_token: str) -> str
     return f"{number}_{name}_{trim}_{press}_{binding_token}.tpl"
 
 
+# ── "Пустой" JOB-файл Preps (кнопка "Создать JOB") ──────────────────
+# Байт-в-байт по образцу реального файла (пустой JOB, который Preps
+# создаёт для нового заказа, — без разложенных сигнатур), с
+# подстановкой имени папки заказа во внутреннюю ссылку на файл
+# (2-я строка). Переводы строк — CRLF, как в оригинале (файл читает
+# сам Preps под Windows).
+_JOB_TEMPLATE = (
+    "%!PS\r\n"
+    "% This: Job Map File: P:\\{folder_name}.job\r\n"
+    "%%FileEncoding: 134217984\r\n"
+    "%%Creator: Preps 5.3.3   Windows Win32\r\n"
+    "%SSiPrepsVer: 1\r\n"
+    "%SSiJobFileRef: -1 'Blank Page' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1\r\n"
+    "%SSiJobFileRef: -2 'LW/CT Single' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1\r\n"
+    "%SSiJobFileRef: -3 'LW/CT Reader Left' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1\r\n"
+    "%SSiJobFileRef: -4 'LW/CT Reader Right' 0 0 0 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0 -1\r\n"
+    "%SSiLaySpecs: 1 0 0.00000 0.00000 '' 0.00000 0.00000 0.00000 0.00000 1.00000 1.00000 14.17300 0 '' '' '' 4 1 1 '' 0\r\n"
+    "%SSiWindowSize: 1 0 0 295 939 4271986 \r\n"
+    "%SSiWindowSize: 2 319 2 550 940 4271986 \r\n"
+    "%SSiWindowSize: 3 3 952 857 964 4271986 \r\n"
+    "%SSiJobColor: 'Composite' 150.00000 45.00000 -1 0.00000 0.00000 0.00000 0.00000 0 0 0.00000 0.00000 0.00000 0.00000 150.00000 45.00000\r\n"
+    "%SSiJobColor: 'Process Cyan' 150.00000 105.00000 -1 0.00000 0.00000 0.00000 0.00000 1 2 1.00000 0.00000 0.00000 0.00000 150.00000 105.00000\r\n"
+    "%SSiJobColor: 'Process Magenta' 150.00000 75.00000 -1 0.00000 0.00000 0.00000 0.00000 2 2 0.00000 0.00000 0.00000 0.00000 150.00000 75.00000\r\n"
+    "%SSiJobColor: 'Process Yellow' 150.00000 90.00000 -1 0.00000 0.00000 0.00000 0.00000 3 2 0.00000 0.00000 0.00000 0.00000 150.00000 90.00000\r\n"
+    "%SSiJobColor: 'Process Black' 150.00000 45.00000 -1 0.00000 0.00000 0.00000 0.00000 4 2 0.00000 0.00000 0.00000 1.00000 150.00000 45.00000\r\n"
+)
+
+
+def build_job_file_content(folder_name: str) -> bytes:
+    """Содержимое пустого JOB-файла Preps для заказа — см. _JOB_TEMPLATE.
+    cp1251 — родная кодировка Preps на Windows; errors="replace" на
+    случай нестандартных символов в имени, чтобы не падать."""
+    return _JOB_TEMPLATE.format(folder_name=folder_name).encode("cp1251", errors="replace")
+
+
 def build_new_template_content(base_path: str, new_name_no_ext: str, signatures_raw: list) -> list:
     """
     Собирает содержимое нового .tpl: берёт "шапку" из base_path
@@ -744,8 +786,21 @@ class ImpositionPage(ctk.CTkFrame):
             win_w = self.app.cfg.get("window_width", 1400)
         except Exception:
             win_w = 1400
+
+        # На достаточно широких/высоких экранах (не мелких/старых
+        # мониторах) держим правую панель шаблонов пошире по умолчанию
+        # — как и на странице заказа (см. order_page.py _build).
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+        except Exception:
+            screen_w = screen_h = None
+
         left_default_w  = 320
-        right_default_w = max(320, int(win_w * 0.25))
+        if screen_w is not None and screen_h is not None and screen_w > 1601 and screen_h > 901:
+            right_default_w = 450
+        else:
+            right_default_w = max(320, int(win_w * 0.25))
         self._left_default_w = left_default_w
 
         is_dark = ctk.get_appearance_mode().lower() == "dark"
@@ -759,7 +814,7 @@ class ImpositionPage(ctk.CTkFrame):
         self._sidebar_btn = ctk.CTkButton(
             toolbar, text="☰  Показать панель", width=180, height=24,
             font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             border_width=1,
             command=self._toggle_sidebar,
         )
@@ -832,7 +887,7 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkEntry(
                 grid_f, textvariable=var, width=80,
                 font=("JetBrains Mono", 12),
-                fg_color=("gray85","gray20"),  text_color=TEXT
+                fg_color=("gray85","gray20"),  text_color=BTN_TEXT
             ).grid(row=row, column=1, sticky="e", pady=4)
 
         ctk.CTkCheckBox(
@@ -895,7 +950,7 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             ping_row, text="⟳ Проверить соединение",
             font=("JetBrains Mono", 10),
-            fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+            fg_color=("gray85","gray20"), hover_color=DARK_BD2, text_color=BTN_TEXT,
              border_width=1,
              height=28,
             command=self._ping_ollama,
@@ -945,7 +1000,7 @@ class ImpositionPage(ctk.CTkFrame):
             ctk.CTkButton(
                 left, text=label,
                 font=("JetBrains Mono", 11),
-                fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+                fg_color=("gray85","gray20"), hover_color=DARK_BD2, text_color=BTN_TEXT,
                  border_width=1,
                  height=30,
                 command=cmd,
@@ -954,7 +1009,7 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             left, text="💾  Сохранить спуск",
             font=("JetBrains Mono", 11, "bold"),
-            fg_color=("gray85","gray20"), hover_color=DARK_BD2,
+            fg_color=("gray85","gray20"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             border_width=1, height=30,
             command=self._save_imposition_to_db,
         ).pack(fill="x", padx=16, pady=(8, 16))
@@ -1017,7 +1072,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             self._zoom_box, text="−", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_out,
         ).pack(side="left", padx=2)
 
@@ -1028,13 +1083,13 @@ class ImpositionPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             self._zoom_box, text="+", width=26, height=24, font=("JetBrains Mono", 13, "bold"),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_in,
         ).pack(side="left", padx=2)
 
         ctk.CTkButton(
             self._zoom_box, text="⤢ 100%", width=56, height=24, font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._zoom_reset,
         ).pack(side="left", padx=(6, 0))
 
@@ -1195,13 +1250,13 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             hdr, text="↺", width=28, height=24,
             font=("JetBrains Mono", 12),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=lambda: self._refresh_templates(force=True),
         ).pack(side="right", padx=(4, 10), pady=6)
         ctk.CTkButton(
             hdr, text="🗄 Архив", width=76, height=24,
             font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=self._refresh_archive_cache,
         ).pack(side="right", padx=(4, 0), pady=6)
 
@@ -1236,13 +1291,22 @@ class ImpositionPage(ctk.CTkFrame):
             w.destroy()
 
         if self._tpl_draft is None:
+            row = ctk.CTkFrame(self._draft_frame, fg_color="transparent")
+            row.pack(fill="x", padx=10, pady=(10, 6))
             ctk.CTkButton(
-                self._draft_frame, text="➕  Создать шаблон",
+                row, text="➕  Создать шаблон",
                 font=("JetBrains Mono", 12, "bold"),
                 fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
                 height=32,
                 command=self._open_create_template_dialog,
-            ).pack(fill="x", padx=10, pady=(10, 6))
+            ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ctk.CTkButton(
+                row, text="🗂  Создать JOB",
+                font=("JetBrains Mono", 12, "bold"),
+                fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
+                height=32,
+                command=self._create_job_file,
+            ).pack(side="left", fill="x", expand=True, padx=(4, 0))
             ctk.CTkLabel(
                 self._draft_frame, text=self._order_criteria_text(),
                 font=("JetBrains Mono", 10), text_color=("gray25","gray80"),
@@ -1304,10 +1368,107 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkButton(
             btns, text="Отмена",
             font=("JetBrains Mono", 11),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             height=30,
             command=self._cancel_template_draft,
         ).pack(side="right", fill="x", expand=True, padx=(4, 0))
+
+    def _create_job_file(self):
+        """Кнопка "Создать JOB" рядом с "Создать шаблон": предлагает
+        имя файла (по умолчанию — реальное имя папки заказа на диске,
+        см. ниже почему не order.folder_name), даёт его отредактировать,
+        затем создаёт в корне папки заказа "пустой" JOB-файл Preps
+        (см. build_job_file_content)."""
+        if not self.order:
+            messagebox.showwarning("Создать JOB", "Заказ не найден.")
+            return
+        if not self.order.folder_path:
+            messagebox.showwarning(
+                "Создать JOB",
+                "У заказа не определена папка на диске — сначала\n"
+                "сохраните заказ на странице заказа."
+            )
+            return
+
+        # order.folder_name — поле из БД, и на практике встречается
+        # незаполненным или сохранённым по-русски (без транслитерации).
+        # Реальное имя папки на диске (basename от folder_path) точно
+        # транслитерировано — папка создаётся под этим именем в
+        # order_page.py._create_order_folder(). Берём его.
+        default_name = os.path.basename(self.order.folder_path.rstrip("\\/"))
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Создать JOB")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        pad = {"padx": 16, "pady": (10, 0)}
+        ctk.CTkLabel(
+            dlg, text=f"Заказ № {self.order.number:04d}",
+            font=("JetBrains Mono", 11, "bold"),
+        ).pack(anchor="w", **pad)
+
+        ctk.CTkLabel(dlg, text="Имя файла (без расширения .job):",
+                     font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
+        v_name = tk.StringVar(value=default_name)
+        entry = ctk.CTkEntry(dlg, textvariable=v_name, font=("JetBrains Mono", 11))
+        entry.pack(fill="x", padx=16, pady=(2, 0))
+        entry.icursor("end")
+
+        err_lbl = ctk.CTkLabel(dlg, text="", font=("JetBrains Mono", 10), text_color=DANGER,
+                                wraplength=380, justify="left")
+        err_lbl.pack(anchor="w", padx=16, pady=(6, 0))
+
+        def on_create():
+            name = v_name.get().strip()
+            if not name:
+                err_lbl.configure(text="Введите имя файла.")
+                return
+            if re.search(r'[\\/:*?"<>|]', name):
+                err_lbl.configure(text='Имя не должно содержать \\ / : * ? " < > |')
+                return
+
+            dst = os.path.join(self.order.folder_path, f"{name}.job")
+            if os.path.exists(dst):
+                if not messagebox.askyesno(
+                    "Создать JOB",
+                    f"Файл уже существует:\n{dst}\n\nПерезаписать?"
+                ):
+                    return
+
+            try:
+                os.makedirs(self.order.folder_path, exist_ok=True)
+                content = build_job_file_content(name)
+                with open(dst, "wb") as f:
+                    f.write(content)
+            except Exception as e:
+                messagebox.showerror("Создать JOB", f"Не удалось создать файл:\n{e}")
+                return
+
+            dlg.destroy()
+            messagebox.showinfo("Создать JOB", f"JOB-файл создан:\n{dst}")
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=16, side="bottom")
+        ctk.CTkButton(
+            btn_row, text="Создать", font=("JetBrains Mono", 12, "bold"),
+            fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
+            command=on_create,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(
+            btn_row, text="Отмена", font=("JetBrains Mono", 12),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
+            command=dlg.destroy,
+        ).pack(side="right", fill="x", expand=True, padx=(6, 0))
+
+        entry.focus_set()
+        dlg.bind("<Return>", lambda e: on_create())
+
+        # См. комментарий в _open_create_template_dialog — размер
+        # выставляем по факту, ПОСЛЕ упаковки всех виджетов, чтобы
+        # кнопки внизу не обрезались краем окна.
+        dlg.update_idletasks()
+        dlg.geometry(f"420x{dlg.winfo_reqheight()}")
 
     def _open_create_template_dialog(self):
         if not self.order:
@@ -1328,7 +1489,6 @@ class ImpositionPage(ctk.CTkFrame):
 
         dlg = ctk.CTkToplevel(self)
         dlg.title("Создать шаблон")
-        dlg.geometry("420x360")
         dlg.transient(self)
         dlg.grab_set()
 
@@ -1344,7 +1504,7 @@ class ImpositionPage(ctk.CTkFrame):
         ctk.CTkLabel(dlg, text="Формат печатной машины (см), напр. 72x52:",
                      font=("JetBrains Mono", 10)).pack(anchor="w", **pad)
         v_press = ctk.CTkComboBox(
-            dlg, values=["65x47", "72x52", "64x45", "64x90", "70x100"],
+            dlg, values=["64x45", "65x47", "72x52", "64x90", "70x100", "72x104"],
             font=("JetBrains Mono", 11),
         )
         v_press.set("72x52")
@@ -1401,9 +1561,18 @@ class ImpositionPage(ctk.CTkFrame):
         ).pack(side="left", fill="x", expand=True, padx=(0, 6))
         ctk.CTkButton(
             btn_row, text="Отмена", font=("JetBrains Mono", 12),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2,
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             command=dlg.destroy,
         ).pack(side="right", fill="x", expand=True, padx=(6, 0))
+
+        # Высоту окна выставляем ПОСЛЕ того, как все виджеты (включая
+        # нижний ряд кнопок) уже упакованы — по фактически требуемому
+        # размеру. Раньше высота была захардкожена (420x360) ДО
+        # упаковки контента, и на некоторых экранах/шрифтах реальный
+        # контент оказывался выше — кнопки "Создать"/"Отмена" уезжали
+        # за нижний край окна.
+        dlg.update_idletasks()
+        dlg.geometry(f"420x{dlg.winfo_reqheight()}")
 
     def _start_new_template_draft(self, filename: str, base_path: str):
         self._tpl_draft = {
@@ -1734,13 +1903,30 @@ class ImpositionPage(ctk.CTkFrame):
             header_row = ctk.CTkFrame(card, fg_color="transparent", cursor="hand2")
             header_row.pack(fill="x")
 
+            sig_container = ctk.CTkFrame(card, fg_color=("gray82","gray18"), corner_radius=0)
+            is_expanded = self._tpl_expanded.get(tpl["path"], False)
+
+            # ВАЖНО: кнопку раскрытия паковаем side="right" ПЕРВОЙ —
+            # она резервирует себе фиксированную ширину справа. Если
+            # запаковать text_col (fill="x", expand=True) раньше неё,
+            # он сразу заберёт себе всю доступную ширину, и кнопке
+            # ничего не останется — её будет выталкивать за правый
+            # край карточки (что и было раньше).
+            expand_btn = ctk.CTkButton(
+                header_row, text=("▾" if is_expanded else "▸"), width=34, height=34,
+                font=("JetBrains Mono", 20, "bold"),
+                fg_color="transparent", hover_color=DARK_BD2, text_color=("gray30","gray80"),
+                command=lambda p=tpl["path"], c=sig_container, b=None: self._on_expand_click(p, c),
+            )
+            expand_btn.pack(side="right", padx=8, pady=8)
+
             text_col = ctk.CTkFrame(header_row, fg_color="transparent", cursor="hand2")
             text_col.pack(side="left", fill="x", expand=True)
 
             name_lbl = ctk.CTkLabel(
                 text_col, text=("🗄 " if tpl.get("from_archive") else "") + tpl["fname"],
                 font=("JetBrains Mono", 12, "bold"),
-                text_color=ACCENT_TEXT, anchor="w", justify="left", wraplength=230,
+                text_color=ACCENT_TEXT, anchor="w", justify="left", wraplength=0,
                 cursor="hand2",
             )
             name_lbl.pack(fill="x", padx=10, pady=(10, 2), anchor="w")
@@ -1754,17 +1940,6 @@ class ImpositionPage(ctk.CTkFrame):
 
             for widget in (header_row, text_col, name_lbl, meta_lbl):
                 widget.bind("<Button-1>", lambda e, p=tpl["path"]: self._open_template(p))
-
-            sig_container = ctk.CTkFrame(card, fg_color=("gray82","gray18"), corner_radius=0)
-
-            is_expanded = self._tpl_expanded.get(tpl["path"], False)
-            expand_btn = ctk.CTkButton(
-                header_row, text=("▾" if is_expanded else "▸"), width=34, height=34,
-                font=("JetBrains Mono", 20, "bold"),
-                fg_color="transparent", hover_color=DARK_BD2, text_color=("gray30","gray80"),
-                command=lambda p=tpl["path"], c=sig_container, b=None: self._on_expand_click(p, c),
-            )
-            expand_btn.pack(side="right", padx=8, pady=8)
 
             if is_expanded:
                 sig_container.pack(fill="x", pady=(0, 6))
@@ -2156,7 +2331,7 @@ class ImpositionPage(ctk.CTkFrame):
                         cell, textvariable=var, width=60,
                         font=("JetBrains Mono", 17, "bold"),
                         fg_color="transparent", border_width=0,
-                        text_color=TEXT if confident else WARNING,
+                        text_color=BTN_TEXT if confident else WARNING,
                         justify="center",
                     )
                     entry.place(relx=0.5, rely=0.5, anchor="center")
