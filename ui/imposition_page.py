@@ -21,6 +21,7 @@ from db.database import (
 )
 from db.models import Order
 from binding_types import binding_code_to_label
+from ui.signature_preview import SignaturePreviewPanel
 
 # Масштаб превью фото спуска по умолчанию — «вписать в окно»
 # (множитель поверх масштаба fit; см. _render_preview)
@@ -47,6 +48,9 @@ ACCENT_TEXT = ("#5c7a00", "#c8f135")
 # text_color — в светлой теме получается почти белый текст на светлом
 # фоне, нечитаемо. Явно проставляем адаптивный цвет через BTN_TEXT.
 BTN_TEXT = ("gray10", "gray90")
+# Ссылка-имя сигнатуры в списке шаблонов (и цвет при наведении).
+SIG_LINK       = ("#2d5fa8", "#8fc0ff")
+SIG_LINK_HOVER = ("#5c7a00", "#c8f135")
 TEXT     = "#e8e8e8"
 TEXT2    = "#888888"
 TEXT3    = "#555555"
@@ -763,6 +767,14 @@ class ImpositionPage(ctk.CTkFrame):
         # (показывают список своих сигнатур)
         self._tpl_expanded = {}
 
+        # Панель графического превью сигнатуры (открывается по
+        # клику на имени сигнатуры в списке шаблонов и живёт в том
+        # же PanedWindow слева от панели шаблонов). None — закрыта.
+        self._sig_preview = None
+        # (путь к шаблону, имя сигнатуры) — что сейчас показано,
+        # чтобы повторный клик по той же сигнатуре закрывал панель.
+        self._sig_preview_key = None
+
         if order_id:
             session = get_session()
             try:
@@ -1021,6 +1033,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         # ── Правая панель — шаблоны Preps ────────────────────────
         right_container = ctk.CTkFrame(self._paned, fg_color="transparent", corner_radius=0)
+        self._right_container = right_container
         right_container.grid_rowconfigure(0, weight=1)
         right_container.grid_columnconfigure(0, weight=1)
         self._paned.add(right_container, width=right_default_w, minsize=280, stretch="never")
@@ -1745,11 +1758,25 @@ class ImpositionPage(ctk.CTkFrame):
             text_col = ctk.CTkFrame(row, fg_color="transparent")
             text_col.pack(side="left", padx=(8, 4), pady=6, fill="x", expand=True)
 
-            ctk.CTkLabel(
-                text_col, text=f"▪ {sig['name'] or '(без имени)'}",
-                font=("JetBrains Mono", 10, "bold"),
-                text_color=("gray10","white"), justify="left", anchor="w",
-            ).pack(fill="x", anchor="w")
+            # Имя сигнатуры — ссылка: по клику слева от панели
+            # шаблонов открывается графическая схема сигнатуры
+            # (см. _show_signature_preview).
+            name_lbl = ctk.CTkLabel(
+                text_col, text=sig['name'] or '(без имени)',
+                font=ctk.CTkFont("JetBrains Mono", 10, weight="bold", underline=True),
+                text_color=SIG_LINK, justify="left", anchor="w", cursor="hand2",
+            )
+            name_lbl.pack(fill="x", anchor="w")
+            name_lbl.bind(
+                "<Button-1>",
+                lambda _e, s=sig, p=path: self._show_signature_preview(s, p),
+            )
+            name_lbl.bind(
+                "<Enter>", lambda _e, w=name_lbl: w.configure(text_color=SIG_LINK_HOVER)
+            )
+            name_lbl.bind(
+                "<Leave>", lambda _e, w=name_lbl: w.configure(text_color=SIG_LINK)
+            )
 
             details = []
             if sig["pages"] is not None:
@@ -1760,6 +1787,61 @@ class ImpositionPage(ctk.CTkFrame):
                 text_col, text="  " + " · ".join(details), font=("JetBrains Mono", 10),
                 text_color=("gray20","gray85"), justify="left", anchor="w",
             ).pack(fill="x", anchor="w")
+
+    # ── ПРЕВЬЮ СИГНАТУРЫ (панель слева от списка шаблонов) ──────
+    def _show_signature_preview(self, sig: dict, tpl_path: str):
+        """
+        Открывает (или переиспользует) панель графической схемы
+        сигнатуры. Панель — это ещё одна секция того же
+        PanedWindow, вставленная ПЕРЕД правой панелью шаблонов,
+        поэтому её границу можно тянуть мышью, как и остальные.
+        Ширина по умолчанию — четверть окна приложения.
+        Повторный клик по той же сигнатуре панель закрывает.
+        """
+        key = (tpl_path, sig.get("name"))
+        if self._sig_preview is not None and self._sig_preview_key == key:
+            self._close_signature_preview()
+            return
+
+        if self._sig_preview is None:
+            try:
+                win_w = self.winfo_toplevel().winfo_width()
+            except Exception:
+                win_w = 0
+            if win_w < 400:  # окно ещё не разложено — берём из настроек
+                try:
+                    win_w = self.app.cfg.get("window_width", 1400)
+                except Exception:
+                    win_w = 1400
+            width = max(300, int(win_w * 0.25))
+
+            self._sig_preview = SignaturePreviewPanel(
+                self._paned, on_close=self._close_signature_preview,
+            )
+            try:
+                self._paned.add(
+                    self._sig_preview, width=width, minsize=260,
+                    stretch="never", before=self._right_container,
+                )
+            except tk.TclError:
+                # Правой панели почему-то нет в paned — добавляем в конец
+                self._paned.add(
+                    self._sig_preview, width=width, minsize=260, stretch="never",
+                )
+
+        self._sig_preview_key = key
+        self._sig_preview.show(sig, os.path.basename(tpl_path))
+
+    def _close_signature_preview(self):
+        if self._sig_preview is None:
+            return
+        try:
+            self._paned.forget(self._sig_preview)
+        except Exception:
+            pass
+        self._sig_preview.destroy()
+        self._sig_preview = None
+        self._sig_preview_key = None
 
     def _refresh_archive_cache(self):
         """
