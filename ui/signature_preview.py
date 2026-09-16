@@ -318,7 +318,7 @@ class SignaturePreviewPanel(ctk.CTkFrame):
             info = f"{info}\n{tpl_name}" if info else tpl_name
         self._info_lbl.configure(text=info)
 
-        self._draw()
+        self._redraw_canvas()
 
     # ── ОБРАБОТЧИКИ ──────────────────────────────────────────────
     def _close(self):
@@ -327,15 +327,15 @@ class SignaturePreviewPanel(ctk.CTkFrame):
 
     def _on_side_change(self, value: str):
         self._side = "A" if value == "Лицо" else "B"
-        self._draw()
+        self._redraw_canvas()
 
     def _toggle_flip(self):
         self._flip180 = not self._flip180
-        self._draw()
+        self._redraw_canvas()
 
     def _on_dims_toggle(self):
         self._show_dims = bool(self._dims_var.get())
-        self._draw()
+        self._redraw_canvas()
 
     def _on_resize(self, _event=None):
         # Перерисовка «с задержкой» — иначе при перетаскивании
@@ -345,10 +345,10 @@ class SignaturePreviewPanel(ctk.CTkFrame):
                 self.after_cancel(self._redraw_job)
             except Exception:
                 pass
-        self._redraw_job = self.after(60, self._draw)
+        self._redraw_job = self.after(60, self._redraw_canvas)
 
     # ── ОТРИСОВКА ────────────────────────────────────────────────
-    def _draw(self):
+    def _redraw_canvas(self):
         self._redraw_job = None
         c = self._canvas
         c.delete("all")
