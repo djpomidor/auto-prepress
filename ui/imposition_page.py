@@ -21,7 +21,7 @@ from db.database import (
 )
 from db.models import Order
 from binding_types import binding_code_to_label
-from signature_preview import SignaturePreviewPanel
+from ui.signature_preview import SignaturePreviewPanel
 
 # Масштаб превью фото спуска по умолчанию — «вписать в окно»
 # (множитель поверх масштаба fit; см. _render_preview)
