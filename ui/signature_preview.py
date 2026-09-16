@@ -65,7 +65,6 @@ _PAGE_FILL    = ("#ffffff", "#f2f2f2")
 _PAGE_LINE    = ("#4a4a4a", "#6e6e6e")
 _PAGE_TEXT    = "#1a1a1a"
 _HEAD_BAR     = "#111111"
-_DIM_COLOR    = "#2faa2f"
 _EMPTY_FILL   = ("#d0d0d0", "#3a3a3a")
 
 
@@ -142,11 +141,49 @@ def parse_signature_geometry(sig: dict) -> dict:
     }
 
 
+def _axis_gaps(pages: list, start_key: str, size_key: str) -> list:
+    """
+    ВСЕ зазоры между соседними полосами вдоль одной оси, каждый со
+    своей позицией (без дедупликации по значению — если в раскладке
+    несколько зазоров одного размера, каждый возвращается отдельно,
+    чтобы на схеме была подсвечена именно ЕГО позиция).
+
+    Возвращает список {"start": pt, "end": pt, "size": pt}, слева
+    направо / снизу вверх. Зазоры меньше ~0.2мм (шум округления)
+    отбрасываются.
+    """
+    spans = sorted({(round(p[start_key], 2), round(p[size_key], 2)) for p in pages})
+    gaps = []
+    for i in range(1, len(spans)):
+        prev_start, prev_size = spans[i - 1]
+        start = prev_start + prev_size
+        end = spans[i][0]
+        if end - start > 0.5:
+            gaps.append({"start": start, "end": end, "size": end - start})
+    return gaps
+
+
+def _axis_touching_boundary(pages: list, start_key: str, size_key: str):
+    """
+    Первая пара соседних полос, стоящих ВПЛОТНУЮ (зазор ~0) вдоль
+    этой оси — нужна для разворотных обложек, где корешок — это сама
+    линия соприкосновения панелей, а не измеримый зазор.
+    """
+    spans = sorted({(round(p[start_key], 2), round(p[size_key], 2)) for p in pages})
+    for i in range(1, len(spans)):
+        prev_start, prev_size = spans[i - 1]
+        gap = spans[i][0] - (prev_start + prev_size)
+        if -0.5 <= gap <= 0.5:
+            pos = prev_start + prev_size
+            return pos
+    return None
+
+
 def measure_layout(geo: dict) -> dict:
     """
-    Размеры, которые печатник обычно и хочет увидеть на схеме
-    (зелёные подписи на превью): поля листа и зазоры между полосами.
-    Всё в pt, наружу выводится в мм.
+    Величины, которые нужно подсветить на схеме: поля листа (для
+    клапана) и ВСЕ зазоры между полосами (для зазоров/корешка).
+    Всё в pt.
     """
     pages = geo["pages"]
     if not pages:
@@ -157,26 +194,12 @@ def measure_layout(geo: dict) -> dict:
     bottom = min(p["y"] for p in pages)
     top    = geo["sheet_h"] - max(p["y"] + p["fh"] for p in pages)
 
-    def _gaps(start_key, size_key):
-        """Уникальные зазоры между соседними рядами/колонками."""
-        spans = sorted({(round(p[start_key], 2), round(p[size_key], 2)) for p in pages})
-        gaps = []
-        for i in range(1, len(spans)):
-            prev_start, prev_size = spans[i - 1]
-            gap = spans[i][0] - (prev_start + prev_size)
-            if gap > 0.05:
-                gaps.append(round(gap, 2))
-        # только различающиеся значения, в порядке появления
-        out = []
-        for g in gaps:
-            if all(abs(g - o) > 0.05 for o in out):
-                out.append(g)
-        return out
-
     return {
         "left": left, "right": right, "bottom": bottom, "top": top,
-        "h_gaps": _gaps("x", "fw"),
-        "v_gaps": _gaps("y", "fh"),
+        "x_gaps": _axis_gaps(pages, "x", "fw"),
+        "y_gaps": _axis_gaps(pages, "y", "fh"),
+        "x_touch": _axis_touching_boundary(pages, "x", "fw"),
+        "y_touch": _axis_touching_boundary(pages, "y", "fh"),
     }
 
 
@@ -295,7 +318,7 @@ class SignaturePreviewPanel(ctk.CTkFrame):
             info = f"{info}\n{tpl_name}" if info else tpl_name
         self._info_lbl.configure(text=info)
 
-        self._redraw_canvas()
+        self._draw()
 
     # ── ОБРАБОТЧИКИ ──────────────────────────────────────────────
     def _close(self):
@@ -304,15 +327,15 @@ class SignaturePreviewPanel(ctk.CTkFrame):
 
     def _on_side_change(self, value: str):
         self._side = "A" if value == "Лицо" else "B"
-        self._redraw_canvas()
+        self._draw()
 
     def _toggle_flip(self):
         self._flip180 = not self._flip180
-        self._redraw_canvas()
+        self._draw()
 
     def _on_dims_toggle(self):
         self._show_dims = bool(self._dims_var.get())
-        self._redraw_canvas()
+        self._draw()
 
     def _on_resize(self, _event=None):
         # Перерисовка «с задержкой» — иначе при перетаскивании
@@ -322,10 +345,10 @@ class SignaturePreviewPanel(ctk.CTkFrame):
                 self.after_cancel(self._redraw_job)
             except Exception:
                 pass
-        self._redraw_job = self.after(60, self._redraw_canvas)
+        self._redraw_job = self.after(60, self._draw)
 
     # ── ОТРИСОВКА ────────────────────────────────────────────────
-    def _redraw_canvas(self):
+    def _draw(self):
         self._redraw_job = None
         c = self._canvas
         c.delete("all")
@@ -346,27 +369,48 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         geo = self._geo
         sw, sh = geo["sheet_w"], geo["sheet_h"]
 
-        pad = 34 if self._show_dims else 16
+        pad = 46 if self._show_dims else 16
         scale = min((cw - 2 * pad) / sw, (ch - 2 * pad) / sh)
         if scale <= 0:
             return
         ox = (cw - sw * scale) / 2
         oy = (ch - sh * scale) / 2
 
-        def to_canvas(x_pt, y_pt, w_pt, h_pt):
-            """PostScript (Y вверх, начало слева снизу) → холст.
-            Учитывает сторону (оборот — зеркало по X) и разворот
-            картинки на 180°."""
+        def transform_x(x_pt, w_pt):
+            """X с учётом зеркала оборота и разворота на 180°."""
             x = x_pt
             if self._side == "B":
-                x = sw - x_pt - w_pt
-            y = y_pt
+                x = sw - x - w_pt
             if self._flip180:
                 x = sw - x - w_pt
-                y = sh - y_pt - h_pt
+            return x
+
+        def transform_y(y_pt, h_pt):
+            """Y с учётом разворота на 180° (оборот Y не трогает)."""
+            y = y_pt
+            if self._flip180:
+                y = sh - y - h_pt
+            return y
+
+        def to_canvas(x_pt, y_pt, w_pt, h_pt):
+            """PostScript (Y вверх, начало слева снизу) → холст."""
+            x = transform_x(x_pt, w_pt)
+            y = transform_y(y_pt, h_pt)
             x1 = ox + x * scale
             y1 = oy + (sh - y - h_pt) * scale
             return x1, y1, x1 + w_pt * scale, y1 + h_pt * scale
+
+        def x_band_to_canvas(x_start_pt, size_pt):
+            """Вертикальная полоса (зазор/поле по оси X) на всю высоту листа."""
+            x = transform_x(x_start_pt, size_pt)
+            x1 = ox + x * scale
+            return x1, oy, x1 + size_pt * scale, oy + sh * scale
+
+        def y_band_to_canvas(y_start_pt, size_pt):
+            """Горизонтальная полоса (зазор/поле по оси Y) на всю ширину листа."""
+            y = transform_y(y_start_pt, size_pt)
+            y1 = oy + (sh - y - size_pt) * scale
+            return ox, y1, ox + sw * scale, y1 + size_pt * scale
 
         sheet_line = _pick(_SHEET_LINE)
 
@@ -375,6 +419,13 @@ class SignaturePreviewPanel(ctk.CTkFrame):
             ox, oy, ox + sw * scale, oy + sh * scale,
             fill=_pick(_SHEET_FILL), outline=sheet_line, width=1,
         )
+
+        # Зазоры между полосами, "в корешке" и клапан — рисуем ДО
+        # страниц, чтобы страницы легли поверх и красным осталась
+        # видна только сама пустая зона (зазор/поле), как на образце.
+        if self._show_dims:
+            self._draw_measurements(c, geo, ox, oy, scale, sw, sh,
+                                     x_band_to_canvas, y_band_to_canvas)
 
         # Полосы
         page_line = _pick(_PAGE_LINE)
@@ -430,64 +481,92 @@ class SignaturePreviewPanel(ctk.CTkFrame):
                         fill=_PAGE_TEXT, font=("JetBrains Mono", fs, "bold"),
                     )
 
-        # Граница между секциями (32 стр. = 2 × 16 на одном листе)
-        if len(geo["sections"]) > 1:
-            for sec in geo["sections"][:-1]:
-                top_pt = max(p["y"] + p["fh"] for p in geo["pages"] if p["section"] == sec)
-                nxt = min(p["y"] for p in geo["pages"] if p["section"] > sec)
-                mid = (top_pt + nxt) / 2
-                y = oy + (sh - (sh - mid if self._flip180 else mid)) * scale
-                c.create_line(ox, y, ox + sw * scale, y,
-                              fill=_DIM_COLOR, dash=(4, 3), width=1)
-
-        if self._show_dims:
-            self._draw_dims(c, geo, ox, oy, scale, sw, sh)
-
-        # Подпись стороны — как в Preps: Side A (front) / Side B (back)
+        # Подпись стороны — как в Preps: Side A (front) / Side B (back).
+        # Выше линейки зазоров (та рисуется чуть ниже, у самого края
+        # листа), чтобы подписи не наезжали друг на друга.
+        side_label_y = max(9, oy - (28 if self._show_dims else 12))
         c.create_text(
-            ox + sw * scale / 2, max(10, oy - 12),
+            ox + sw * scale / 2, side_label_y,
             text="Сторона A (лицо)" if self._side == "A" else "Сторона B (оборот)",
             fill=_pick(("gray25", "gray75")), font=("JetBrains Mono", 10, "bold"),
         )
 
-    def _draw_dims(self, c, geo, ox, oy, scale, sw, sh):
-        """Зелёные подписи размеров: поля листа и зазоры (в мм)."""
+    def _draw_measurements(self, c, geo, ox, oy, scale, sw, sh,
+                            x_band_to_canvas, y_band_to_canvas):
+        """
+        Подсвечивает красным ровно три вещи (как просил заказчик):
+          • ВСЕ зазоры между полосами (обе оси, каждая позиция);
+          • зазор(ы) "в корешке" — те из них, что совпадают по
+            величине с gutter_total_mm из .tpl (SmartMark-матрица),
+            выделяются отдельной подписью "Корешок";
+          • клапан — единственное поле листа, снизу при ландшафтной
+            ориентации и слева при портретной (сторона A/лицо; для
+            оборота и разворота на 180° позиция того же поля просто
+            едет по тем же правилам, что и страницы).
+        Больше никакие поля (остальные 3 стороны) не подсвечиваются.
+        """
         m = measure_layout(geo)
         if not m:
             return
-        font = ("JetBrains Mono", 10, "bold")
-        x_mid = ox + sw * scale / 2
-        y_mid = oy + sh * scale / 2
 
-        # Поля листа. При развороте на 180° низ/верх и лево/право
-        # меняются местами — подписи должны ехать вместе с картинкой.
-        left, right = m["left"], m["right"]
-        bottom, top = m["bottom"], m["top"]
-        if self._side == "B":
-            left, right = right, left
-        if self._flip180:
-            left, right = right, left
-            bottom, top = top, bottom
+        RED_FILL = "#e53935"
+        RED_TEXT = "#c62828" if ctk.get_appearance_mode().lower() != "dark" else "#ff6b63"
+        font_num = ("JetBrains Mono", 10, "bold")
 
-        c.create_text(ox - 16, y_mid, text=_fmt_mm(left), fill=_DIM_COLOR,
-                      font=font, angle=90)
-        c.create_text(ox + sw * scale + 16, y_mid, text=_fmt_mm(right),
-                      fill=_DIM_COLOR, font=font, angle=90)
-        c.create_text(x_mid, oy + sh * scale + 14, text=_fmt_mm(bottom),
-                      fill=_DIM_COLOR, font=font)
-        c.create_text(x_mid, oy - 2, text=_fmt_mm(top), fill=_DIM_COLOR,
-                      font=font)
+        sig = self._sig or {}
+        gutter_mm = sig.get("gutter_total_mm")
 
-        # Зазоры между колонками/рядами — компактной строкой в углу,
-        # чтобы не загромождать саму схему.
-        bits = []
-        if m["h_gaps"]:
-            bits.append("по X: " + ", ".join(_fmt_mm(g) for g in m["h_gaps"]))
-        if m["v_gaps"]:
-            bits.append("по Y: " + ", ".join(_fmt_mm(g) for g in m["v_gaps"]))
-        if bits:
-            c.create_text(
-                ox + 4, oy + sh * scale + 26, anchor="w",
-                text="зазоры, мм — " + "; ".join(bits),
-                fill=_DIM_COLOR, font=("JetBrains Mono", 9),
-            )
+        def is_spine(size_pt):
+            if gutter_mm is None:
+                return False
+            return abs(_mm(size_pt) - gutter_mm) < 0.35
+
+        # ── ВСЕ зазоры по X: полоса на всю высоту, подпись сверху ──
+        for gap in m["x_gaps"]:
+            x1, y1, x2, y2 = x_band_to_canvas(gap["start"], gap["size"])
+            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            label = f"Корешок {_fmt_mm(gap['size'])}" if is_spine(gap["size"]) else _fmt_mm(gap["size"])
+            cx = (x1 + x2) / 2
+            c.create_text(cx, oy - 10, text=label, fill=RED_TEXT, font=font_num)
+
+        # ── ВСЕ зазоры по Y: полоса на всю ширину, подпись слева ───
+        for gap in m["y_gaps"]:
+            x1, y1, x2, y2 = y_band_to_canvas(gap["start"], gap["size"])
+            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            label = f"Корешок {_fmt_mm(gap['size'])}" if is_spine(gap["size"]) else _fmt_mm(gap["size"])
+            cy = (y1 + y2) / 2
+            c.create_text(ox - 10, cy, text=label, fill=RED_TEXT, font=font_num, angle=90)
+
+        # ── Корешок без измеримого зазора (панели впритык) ──────────
+        # Бывает на разворотных обложках: панели стоят вплотную, но
+        # у сигнатуры всё равно задан gutter_total_mm — отмечаем саму
+        # линию соприкосновения тонкой чертой с подписью.
+        if gutter_mm is not None and not any(is_spine(g["size"]) for g in m["x_gaps"] + m["y_gaps"]):
+            if m["x_touch"] is not None:
+                x1, y1, x2, y2 = x_band_to_canvas(m["x_touch"], 1.4)
+                c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+                c.create_text((x1 + x2) / 2, oy - 10, text=f"Корешок {gutter_mm:g}",
+                              fill=RED_TEXT, font=font_num)
+            elif m["y_touch"] is not None:
+                x1, y1, x2, y2 = y_band_to_canvas(m["y_touch"], 1.4)
+                c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+                c.create_text(ox - 10, (y1 + y2) / 2, text=f"Корешок {gutter_mm:g}",
+                              fill=RED_TEXT, font=font_num, angle=90)
+
+        # ── Клапан: единственное поле листа ─────────────────────────
+        # Bottom при ландшафтном листе, Left при портретном (сторона
+        # A/лицо — так задаёт clapan_side парсер .tpl). Позиция того
+        # же поля дальше едет по тем же правилам зеркалирования, что
+        # и страницы (x_band_to_canvas/y_band_to_canvas).
+        clapan_side = sig.get("clapan_side")
+        clapan_mm = sig.get("clapan_mm")
+        if clapan_side == "Left" and m["left"] > 0.5:
+            x1, y1, x2, y2 = x_band_to_canvas(0, m["left"])
+            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            label = f"Клапан {clapan_mm:g}" if clapan_mm is not None else "Клапан"
+            c.create_text((x1 + x2) / 2, oy - 10, text=label, fill=RED_TEXT, font=font_num)
+        elif clapan_side == "Bottom" and m["bottom"] > 0.5:
+            x1, y1, x2, y2 = y_band_to_canvas(0, m["bottom"])
+            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            label = f"Клапан {clapan_mm:g}" if clapan_mm is not None else "Клапан"
+            c.create_text(ox - 10, (y1 + y2) / 2, text=label, fill=RED_TEXT, font=font_num, angle=90)
