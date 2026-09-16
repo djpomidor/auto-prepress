@@ -451,7 +451,7 @@ class SignaturePreviewPanel(ctk.CTkFrame):
                 if self._flip180:
                     angle = (angle + 180) % 360
 
-            bar = max(2.0, min(7.0, min(x2 - x1, y2 - y1) * 0.035))
+            bar = max(4.0, min(14.0, min(x2 - x1, y2 - y1) * 0.07))
             if angle == 0:      # голова вверху
                 c.create_rectangle(x1 + 1, y1 + 1, x2 - 1, y1 + 1 + bar,
                                    fill=_HEAD_BAR, outline="")
@@ -525,7 +525,7 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         for gap in m["x_gaps"]:
             x1, y1, x2, y2 = x_band_to_canvas(gap["start"], gap["size"])
             c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-            label = f"Корешок {_fmt_mm(gap['size'])}" if is_spine(gap["size"]) else _fmt_mm(gap["size"])
+            label = _fmt_mm(gap["size"])
             cx = (x1 + x2) / 2
             c.create_text(cx, oy - 10, text=label, fill=RED_TEXT, font=font_num)
 
@@ -533,7 +533,7 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         for gap in m["y_gaps"]:
             x1, y1, x2, y2 = y_band_to_canvas(gap["start"], gap["size"])
             c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-            label = f"Корешок {_fmt_mm(gap['size'])}" if is_spine(gap["size"]) else _fmt_mm(gap["size"])
+            label = _fmt_mm(gap["size"])
             cy = (y1 + y2) / 2
             c.create_text(ox - 10, cy, text=label, fill=RED_TEXT, font=font_num, angle=90)
 
@@ -545,12 +545,12 @@ class SignaturePreviewPanel(ctk.CTkFrame):
             if m["x_touch"] is not None:
                 x1, y1, x2, y2 = x_band_to_canvas(m["x_touch"], 1.4)
                 c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-                c.create_text((x1 + x2) / 2, oy - 10, text=f"Корешок {gutter_mm:g}",
+                c.create_text((x1 + x2) / 2, oy - 10, text=f"{gutter_mm:g}",
                               fill=RED_TEXT, font=font_num)
             elif m["y_touch"] is not None:
                 x1, y1, x2, y2 = y_band_to_canvas(m["y_touch"], 1.4)
                 c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-                c.create_text(ox - 10, (y1 + y2) / 2, text=f"Корешок {gutter_mm:g}",
+                c.create_text(ox - 10, (y1 + y2) / 2, text=f"{gutter_mm:g}",
                               fill=RED_TEXT, font=font_num, angle=90)
 
         # ── Клапан: единственное поле листа ─────────────────────────
@@ -563,10 +563,10 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         if clapan_side == "Left" and m["left"] > 0.5:
             x1, y1, x2, y2 = x_band_to_canvas(0, m["left"])
             c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-            label = f"Клапан {clapan_mm:g}" if clapan_mm is not None else "Клапан"
+            label = f"{clapan_mm:g}" if clapan_mm is not None else ""
             c.create_text((x1 + x2) / 2, oy - 10, text=label, fill=RED_TEXT, font=font_num)
         elif clapan_side == "Bottom" and m["bottom"] > 0.5:
             x1, y1, x2, y2 = y_band_to_canvas(0, m["bottom"])
             c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
-            label = f"Клапан {clapan_mm:g}" if clapan_mm is not None else "Клапан"
+            label = f"{clapan_mm:g}" if clapan_mm is not None else ""
             c.create_text(ox - 10, (y1 + y2) / 2, text=label, fill=RED_TEXT, font=font_num, angle=90)

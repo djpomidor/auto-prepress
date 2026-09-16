@@ -21,7 +21,7 @@ from db.database import (
 )
 from db.models import Order
 from binding_types import binding_code_to_label
-from ui.signature_preview import SignaturePreviewPanel
+from signature_preview import SignaturePreviewPanel
 
 # Масштаб превью фото спуска по умолчанию — «вписать в окно»
 # (множитель поверх масштаба fit; см. _render_preview)
@@ -1763,7 +1763,7 @@ class ImpositionPage(ctk.CTkFrame):
             # (см. _show_signature_preview).
             name_lbl = ctk.CTkLabel(
                 text_col, text=sig['name'] or '(без имени)',
-                font=ctk.CTkFont("JetBrains Mono", 10, weight="bold", underline=True),
+                font=("JetBrains Mono", 10, "bold underline"),
                 text_color=SIG_LINK, justify="left", anchor="w", cursor="hand2",
             )
             name_lbl.pack(fill="x", anchor="w")
@@ -1795,7 +1795,7 @@ class ImpositionPage(ctk.CTkFrame):
         сигнатуры. Панель — это ещё одна секция того же
         PanedWindow, вставленная ПЕРЕД правой панелью шаблонов,
         поэтому её границу можно тянуть мышью, как и остальные.
-        Ширина по умолчанию — четверть окна приложения.
+        Ширина по умолчанию — 40% окна приложения.
         Повторный клик по той же сигнатуре панель закрывает.
         """
         key = (tpl_path, sig.get("name"))
@@ -1813,20 +1813,20 @@ class ImpositionPage(ctk.CTkFrame):
                     win_w = self.app.cfg.get("window_width", 1400)
                 except Exception:
                     win_w = 1400
-            width = max(300, int(win_w * 0.25))
+            width = max(420, int(win_w * 0.40))
 
             self._sig_preview = SignaturePreviewPanel(
                 self._paned, on_close=self._close_signature_preview,
             )
             try:
                 self._paned.add(
-                    self._sig_preview, width=width, minsize=260,
+                    self._sig_preview, width=width, minsize=360,
                     stretch="never", before=self._right_container,
                 )
             except tk.TclError:
                 # Правой панели почему-то нет в paned — добавляем в конец
                 self._paned.add(
-                    self._sig_preview, width=width, minsize=260, stretch="never",
+                    self._sig_preview, width=width, minsize=360, stretch="never",
                 )
 
         self._sig_preview_key = key
