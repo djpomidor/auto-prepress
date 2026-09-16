@@ -1763,7 +1763,7 @@ class ImpositionPage(ctk.CTkFrame):
             # (см. _show_signature_preview).
             name_lbl = ctk.CTkLabel(
                 text_col, text=sig['name'] or '(без имени)',
-                font=("JetBrains Mono", 10, "bold underline"),
+                font=ctk.CTkFont("JetBrains Mono", 10, weight="bold", underline=True),
                 text_color=SIG_LINK, justify="left", anchor="w", cursor="hand2",
             )
             name_lbl.pack(fill="x", anchor="w")
