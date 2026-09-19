@@ -451,18 +451,26 @@ class SignaturePreviewPanel(ctk.CTkFrame):
                 if self._flip180:
                     angle = (angle + 180) % 360
 
-            bar = max(4.0, min(14.0, min(x2 - x1, y2 - y1) * 0.07))
+            # Чёрная полоса «головы»: потолще и с отступом от краёв
+            # страницы (и от головного края, и от боковых).
+            dim = min(x2 - x1, y2 - y1)
+            bar = max(6.0, min(20.0, dim * 0.10))
+            inset = min(max(3.0, min(9.0, dim * 0.06)), dim / 4)
             if angle == 0:      # голова вверху
-                c.create_rectangle(x1 + 1, y1 + 1, x2 - 1, y1 + 1 + bar,
+                c.create_rectangle(x1 + inset, y1 + inset,
+                                   x2 - inset, y1 + inset + bar,
                                    fill=_HEAD_BAR, outline="")
             elif angle == 180:  # голова внизу
-                c.create_rectangle(x1 + 1, y2 - 1 - bar, x2 - 1, y2 - 1,
+                c.create_rectangle(x1 + inset, y2 - inset - bar,
+                                   x2 - inset, y2 - inset,
                                    fill=_HEAD_BAR, outline="")
             elif angle == 90:   # голова слева
-                c.create_rectangle(x1 + 1, y1 + 1, x1 + 1 + bar, y2 - 1,
+                c.create_rectangle(x1 + inset, y1 + inset,
+                                   x1 + inset + bar, y2 - inset,
                                    fill=_HEAD_BAR, outline="")
             else:               # 270° — голова справа
-                c.create_rectangle(x2 - 1 - bar, y1 + 1, x2 - 1, y2 - 1,
+                c.create_rectangle(x2 - inset - bar, y1 + inset,
+                                   x2 - inset, y2 - inset,
                                    fill=_HEAD_BAR, outline="")
 
             if not empty:
@@ -572,3 +580,34 @@ class SignaturePreviewPanel(ctk.CTkFrame):
             c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
             label = f"{clapan_mm:g}" if clapan_mm is not None else ""
             c.create_text(ox - 10, (y1 + y2) / 2, text=label, fill=GREEN_TEXT, font=font_num, angle=0)
+
+        # ── Остальные поля листа: только значение, серым шрифтом ────
+        # Сторона клапана уже подписана выше (зелёным), поэтому здесь
+        # она пропускается. Заливки нет — только число в мм. Подписи
+        # ставятся так же, как у зазоров: для вертикальных полей
+        # (лево/право) — над листом, для горизонтальных (низ/верх) —
+        # слева от листа. Позиция считается теми же функциями, что и
+        # страницы, поэтому корректно едет при обороте и развороте 180°.
+        GRAY_TEXT = _pick(("#707070", "#9a9a9a"))
+        font_gray = ("JetBrains Mono", 10)
+
+        margins = []
+        if clapan_side != "Left":
+            margins.append(("x", 0, m["left"]))
+        margins.append(("x", sw - m["right"], m["right"]))
+        if clapan_side != "Bottom":
+            margins.append(("y", 0, m["bottom"]))
+        margins.append(("y", sh - m["top"], m["top"]))
+
+        for axis, start, size in margins:
+            if size <= 0.5:
+                continue
+            label = _fmt_mm(size)
+            if axis == "x":
+                x1, y1, x2, y2 = x_band_to_canvas(start, size)
+                c.create_text((x1 + x2) / 2, oy - 10, text=label,
+                              fill=GRAY_TEXT, font=font_gray)
+            else:
+                x1, y1, x2, y2 = y_band_to_canvas(start, size)
+                c.create_text(ox - 10, (y1 + y2) / 2, text=label,
+                              fill=GRAY_TEXT, font=font_gray)
