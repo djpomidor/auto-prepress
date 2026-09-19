@@ -1,6 +1,7 @@
 """
 Главная страница — список заказов.
 """
+import os
 import customtkinter as ctk
 from tkinter import ttk
 import tkinter as tk
@@ -86,7 +87,10 @@ class OrdersPage(ctk.CTkFrame):
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
         vsb.pack(side="right", fill="y")
 
-        cols = ("number", "name", "description", "format", "binding", "status", "created")
+        cols = (
+            "number", "name", "folder", "description",
+            "format", "binding", "status", "created",
+        )
         self.tree = ttk.Treeview(
             table_frame, columns=cols, show="headings",
             style="Orders.Treeview",
@@ -97,6 +101,7 @@ class OrdersPage(ctk.CTkFrame):
         headers = {
             "number":      ("№",              70,  "center"),
             "name":        ("Название",       130, "w"),
+            "folder":      ("P:\\",            180, "w"),
             "description": ("Описание заказа",150, "w"),
             "format":      ("Формат",         100, "center"),
             "binding":     ("Скрепление",     130, "center"),
@@ -148,6 +153,8 @@ class OrdersPage(ctk.CTkFrame):
             orders.sort(key=lambda o: o.number, reverse=rev)
         elif self._sort_col == "name":
             orders.sort(key=lambda o: (o.name or "").lower(), reverse=rev)
+        elif self._sort_col == "folder":
+            orders.sort(key=lambda o: self._folder_display(o).lower(), reverse=rev)
         elif self._sort_col == "description":
             orders.sort(key=lambda o: (o.description or "").lower(), reverse=rev)
         elif self._sort_col == "format":
@@ -168,11 +175,13 @@ class OrdersPage(ctk.CTkFrame):
 
             fmt = f"{o.width}×{o.height}" if o.width and o.height else "—"
             created = o.created.strftime("%d.%m.%Y %H:%M") if o.created else "—"
+            folder = self._folder_display(o)
             self.tree.insert(
                 "", "end", iid=str(o.id),
                 values=(
                     f"{o.number:04d}",
                     o.name or "",
+                    folder,
                     o.description or "—",
                     fmt,
                     binding_code_to_label(o.binding) or "—",
@@ -185,6 +194,15 @@ class OrdersPage(ctk.CTkFrame):
         n = len(orders)
         self._count_lbl.configure(text=f"{n} заказов")
         self._status_bar.configure(text=f"  Загружено: {n}")
+
+    @staticmethod
+    def _folder_display(order: Order) -> str:
+        """Возвращает имя папки заказа в формате для колонки P:\\."""
+        folder_path = (order.folder_path or "").rstrip("\\/")
+        if not folder_path:
+            return "—"
+        folder_name = os.path.basename(folder_path)
+        return f"{folder_name}\\" if folder_name else "—"
 
     def _on_click(self, event):
         """

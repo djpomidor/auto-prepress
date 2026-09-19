@@ -509,8 +509,10 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         if not m:
             return
 
-        RED_FILL = "#e53935"
-        RED_TEXT = "#c62828" if ctk.get_appearance_mode().lower() != "dark" else "#ff6b63"
+        # Нейтральный зелёный вместо красного для выделения расстояний
+        # и значений в превью сигнатуры.
+        GREEN_FILL = "#8DBF9D"
+        GREEN_TEXT = "#4D7C5A" if ctk.get_appearance_mode().lower() != "dark" else "#9AD3A8"
         font_num = ("JetBrains Mono", 10, "bold")
 
         sig = self._sig or {}
@@ -524,18 +526,18 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         # ── ВСЕ зазоры по X: полоса на всю высоту, подпись сверху ──
         for gap in m["x_gaps"]:
             x1, y1, x2, y2 = x_band_to_canvas(gap["start"], gap["size"])
-            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
             label = _fmt_mm(gap["size"])
             cx = (x1 + x2) / 2
-            c.create_text(cx, oy - 10, text=label, fill=RED_TEXT, font=font_num)
+            c.create_text(cx, oy - 10, text=label, fill=GREEN_TEXT, font=font_num)
 
         # ── ВСЕ зазоры по Y: полоса на всю ширину, подпись слева ───
         for gap in m["y_gaps"]:
             x1, y1, x2, y2 = y_band_to_canvas(gap["start"], gap["size"])
-            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
             label = _fmt_mm(gap["size"])
             cy = (y1 + y2) / 2
-            c.create_text(ox - 10, cy, text=label, fill=RED_TEXT, font=font_num, angle=90)
+            c.create_text(ox - 10, cy, text=label, fill=GREEN_TEXT, font=font_num, angle=0)
 
         # ── Корешок без измеримого зазора (панели впритык) ──────────
         # Бывает на разворотных обложках: панели стоят вплотную, но
@@ -544,14 +546,14 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         if gutter_mm is not None and not any(is_spine(g["size"]) for g in m["x_gaps"] + m["y_gaps"]):
             if m["x_touch"] is not None:
                 x1, y1, x2, y2 = x_band_to_canvas(m["x_touch"], 1.4)
-                c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+                c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
                 c.create_text((x1 + x2) / 2, oy - 10, text=f"{gutter_mm:g}",
-                              fill=RED_TEXT, font=font_num)
+                              fill=GREEN_TEXT, font=font_num)
             elif m["y_touch"] is not None:
                 x1, y1, x2, y2 = y_band_to_canvas(m["y_touch"], 1.4)
-                c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+                c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
                 c.create_text(ox - 10, (y1 + y2) / 2, text=f"{gutter_mm:g}",
-                              fill=RED_TEXT, font=font_num, angle=90)
+                              fill=GREEN_TEXT, font=font_num, angle=0)
 
         # ── Клапан: единственное поле листа ─────────────────────────
         # Bottom при ландшафтном листе, Left при портретном (сторона
@@ -562,11 +564,11 @@ class SignaturePreviewPanel(ctk.CTkFrame):
         clapan_mm = sig.get("clapan_mm")
         if clapan_side == "Left" and m["left"] > 0.5:
             x1, y1, x2, y2 = x_band_to_canvas(0, m["left"])
-            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
             label = f"{clapan_mm:g}" if clapan_mm is not None else ""
-            c.create_text((x1 + x2) / 2, oy - 10, text=label, fill=RED_TEXT, font=font_num)
+            c.create_text((x1 + x2) / 2, oy - 10, text=label, fill=GREEN_TEXT, font=font_num)
         elif clapan_side == "Bottom" and m["bottom"] > 0.5:
             x1, y1, x2, y2 = y_band_to_canvas(0, m["bottom"])
-            c.create_rectangle(x1, y1, x2, y2, fill=RED_FILL, outline="")
+            c.create_rectangle(x1, y1, x2, y2, fill=GREEN_FILL, outline="")
             label = f"{clapan_mm:g}" if clapan_mm is not None else ""
-            c.create_text(ox - 10, (y1 + y2) / 2, text=label, fill=RED_TEXT, font=font_num, angle=90)
+            c.create_text(ox - 10, (y1 + y2) / 2, text=label, fill=GREEN_TEXT, font=font_num, angle=0)
