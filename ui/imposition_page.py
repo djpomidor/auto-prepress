@@ -812,7 +812,7 @@ class ImpositionPage(ctk.CTkFrame):
         if screen_w is not None and screen_h is not None and screen_w > 1601 and screen_h > 901:
             right_default_w = 450
         else:
-            right_default_w = max(320, int(win_w * 0.25))
+            right_default_w = max(320, int(win_w * 0.35))
         self._left_default_w = left_default_w
 
         is_dark = ctk.get_appearance_mode().lower() == "dark"
@@ -824,7 +824,7 @@ class ImpositionPage(ctk.CTkFrame):
         toolbar.pack_propagate(False)
 
         self._sidebar_btn = ctk.CTkButton(
-            toolbar, text="☰  Показать панель", width=180, height=24,
+            toolbar, text="☰  Показать ИИ панель (Beta)", width=180, height=24,
             font=("JetBrains Mono", 10),
             fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
             border_width=1,
@@ -1044,7 +1044,7 @@ class ImpositionPage(ctk.CTkFrame):
         if self._sidebar_visible:
             self._paned.forget(self._left_container)
             self._sidebar_visible = False
-            self._sidebar_btn.configure(text="☰  Показать панель")
+            self._sidebar_btn.configure(text="☰  Показать ИИ панель (Beta)")
         else:
             first_pane = self._paned.panes()[0] if self._paned.panes() else None
             if first_pane:
@@ -1784,7 +1784,7 @@ class ImpositionPage(ctk.CTkFrame):
             details.append(f"Клапан: {sig['clapan_mm']} мм" if sig["clapan_mm"] is not None else "Клапан: —")
             details.append(f"В голове: {sig['gutter_total_mm']} мм" if sig["gutter_total_mm"] is not None else "В голове: —")
             ctk.CTkLabel(
-                text_col, text="  " + " · ".join(details), font=("JetBrains Mono", 10),
+                text_col, text="  " + " • ".join(details), font=("JetBrains Mono", 10),
                 text_color=("gray20","gray85"), justify="left", anchor="w",
             ).pack(fill="x", anchor="w")
 
@@ -1813,7 +1813,7 @@ class ImpositionPage(ctk.CTkFrame):
                     win_w = self.app.cfg.get("window_width", 1400)
                 except Exception:
                     win_w = 1400
-            width = max(420, int(win_w * 0.40))
+            width = max(420, int(win_w * 0.30))
 
             self._sig_preview = SignaturePreviewPanel(
                 self._paned, on_close=self._close_signature_preview,
@@ -2015,7 +2015,7 @@ class ImpositionPage(ctk.CTkFrame):
 
             meta_lbl = ctk.CTkLabel(
                 text_col,
-                text=f"№{tpl['order_num']} · {tpl['trim']} мм · бумага {tpl['paper']} · {tpl['binding']}",
+                text=f"№ {tpl['order_num']} • {tpl['trim']} мм • {tpl['binding']}",
                 font=("JetBrains Mono", 11), text_color=("gray30","gray75"), anchor="w",
             )
             meta_lbl.pack(fill="x", padx=10, pady=(0, 10), anchor="w")
