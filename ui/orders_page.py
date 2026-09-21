@@ -112,7 +112,7 @@ class OrdersPage(ctk.CTkFrame):
             self.tree.heading(col, text=label,
                               command=lambda c=col: self._sort_by(c))
             self.tree.column(col, width=width, anchor=anchor,
-                             stretch=(col == "name"))
+                             stretch=(col in ("name", "folder")))           ##stretch=(col == "name")) ширина колонки "Название" и "P:\" будет растягиваться при изменении размера окна
 
         danger = "#ff5555" if is_dark else "#c62828"
         even   = "#1e1e1e" if is_dark else "#fafafa"

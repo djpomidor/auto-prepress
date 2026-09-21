@@ -1296,7 +1296,7 @@ class ImpositionPage(ctk.CTkFrame):
         o = self.order
         fmt = f"{o.width}×{o.height} мм" if o.width and o.height else "формат не указан"
         binding = binding_code_to_label(o.binding) if o.binding else "скрепление не указано"
-        return f"Заказ № {o.number:04d}\nФормат: {fmt}\nСкрепление: {binding}"
+        return f"Заказ № {o.number:04d} • Формат: {fmt} • Скрепление: {binding}"
 
     # ── ЧЕРНОВИК НОВОГО ШАБЛОНА ("Создать шаблон") ──────────────────
     def _render_draft_bar(self):
