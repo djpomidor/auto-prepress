@@ -740,6 +740,206 @@ def build_new_template_content(base_path: str, new_name_no_ext: str, signatures_
     return out_lines
 
 
+# ── Существующий JOB-файл Preps: разбор и добавление сигнатур ────────
+# Формат .job официально не документирован — разбор основан на
+# анализе реального файла (Preps 5.3.3). Что важно для нас:
+#   • %SSiJobPage: ...            — страница заказа (сколько страниц в job);
+#   • %SSiSigUsed: 'шаблон' 'сигнатура' ... — «сигнатура из шаблона
+#     использована в job» (имя шаблона — без .tpl). Сразу за ней идут
+#     ДВЕ строки
+#   • %SSiJobDelivery: <стр> <№> <флаг> 0 0 — первая содержит первую
+#     страницу, попавшую в эту сигнатуру, вторая — страницу, с которой
+#     начинается СЛЕДУЮЩАЯ (диапазон «полуоткрытый»: 1 → 33 = стр. 1–32);
+#     <№> — сквозной порядковый номер строки Delivery в файле;
+#   • сигнатуру без назначенных страниц Preps пишет как «1 <№> 0» и
+#     «1 <№+1> 0» (так в примере записаны «3pl …» и «4pl …»).
+# Всё остальное (шапка, %SSiLaySpecs, %SSiWindowSize, %SSiJobColor …)
+# при правке копируется как есть. Новые блоки дописываются сразу после
+# последнего блока %SSiSigUsed/%SSiJobDelivery.
+_JOB_SIGUSED_RE = re.compile(r"^(%SSiSigUsed:\s+)'([^']*)'(\s+)'([^']*)'(.*?)\s*$")
+_JOB_DELIVERY_RE = re.compile(r"^%SSiJobDelivery:\s+(-?\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
+# Хвост строки %SSiSigUsed после двух имён — как у Preps по умолчанию;
+# при правке берём хвост из уже имеющихся в job строк (см. ниже).
+_JOB_DEFAULT_SIGUSED_TAIL = " 0 0 '' '' '' 10.00000 '' '' '' '' '' 0 0"
+
+
+def _encode_job_text(text: str) -> bytes:
+    """Обратно к чтению job (cp1251 + surrogateescape): байты, которые
+    не смогли декодироваться, возвращаются один-в-один; символы, которых
+    нет в cp1251, заменяются на «?»."""
+    try:
+        return text.encode("cp1251", errors="surrogateescape")
+    except UnicodeEncodeError:
+        pass
+    out = bytearray()
+    for ch in text:
+        o = ord(ch)
+        if 0xDC80 <= o <= 0xDCFF:
+            out.append(o - 0xDC00)
+            continue
+        try:
+            out += ch.encode("cp1251")
+        except UnicodeEncodeError:
+            out += b"?"
+    return bytes(out)
+
+
+def parse_job_file(path: str) -> dict:
+    """
+    Разбирает существующий .job на три части:
+      head   — всё до первого блока %SSiSigUsed (шапка, страницы, раскладка);
+      blocks — блоки «%SSiSigUsed + его %SSiJobDelivery» (использованные
+               в job сигнатуры);
+      tail   — всё после последнего блока (%SSiWindowSize, %SSiJobColor…).
+    Если блоков ещё нет (пустой job) — точка вставки перед первой
+    %SSiWindowSize/%SSiJobColor. Строки хранятся как есть, с их
+    переводами строк, поэтому неизменённое содержимое при сохранении
+    не меняется ни на байт.
+    Бросает OSError (нет доступа) или ValueError (не похоже на job).
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = raw.decode("cp1251", errors="surrogateescape")
+    lines = re.findall(r"[^\n]*\n|[^\n]+", text)
+    if not lines or not lines[0].startswith("%!PS"):
+        raise ValueError("Файл не похож на JOB Preps (нет заголовка %!PS).")
+
+    eol = "\r\n"
+    if lines[0].endswith("\n") and not lines[0].endswith("\r\n"):
+        eol = "\n"
+
+    total_pages = sum(1 for ln in lines if ln.startswith("%SSiJobPage:"))
+    max_seq = 0
+    for ln in lines:
+        m = _JOB_DELIVERY_RE.match(ln)
+        if m:
+            max_seq = max(max_seq, int(m.group(2)))
+
+    first = next((i for i, ln in enumerate(lines) if ln.startswith("%SSiSigUsed:")), None)
+    blocks = []
+    if first is not None:
+        head = lines[:first]
+        i = first
+        while i < len(lines):
+            ln = lines[i]
+            if ln.startswith("%SSiSigUsed:"):
+                m = _JOB_SIGUSED_RE.match(ln.rstrip("\r\n"))
+                blocks.append({
+                    "lines": [ln],
+                    "tpl": m.group(2) if m else "",
+                    "sig": m.group(4) if m else "",
+                    "tail_params": m.group(5) if m else None,
+                    "deliveries": [],
+                    "start": None, "end": None,
+                })
+            elif ln.startswith("%SSiJobDelivery:") and blocks:
+                blocks[-1]["lines"].append(ln)
+                m = _JOB_DELIVERY_RE.match(ln)
+                if m:
+                    blocks[-1]["deliveries"].append(int(m.group(1)))
+            else:
+                break
+            i += 1
+        tail = lines[i:]
+        for b in blocks:
+            if len(b["deliveries"]) == 2:
+                b["start"], b["end"] = b["deliveries"]
+    else:
+        idx = next(
+            (i for i, ln in enumerate(lines)
+             if ln.startswith("%SSiWindowSize:") or ln.startswith("%SSiJobColor:")),
+            len(lines),
+        )
+        head, tail = lines[:idx], lines[idx:]
+
+    return {
+        "path": path, "eol": eol, "head": head, "blocks": blocks, "tail": tail,
+        "total_pages": total_pages, "max_seq": max_seq,
+    }
+
+
+def plan_job_additions(job: dict, additions: list) -> list:
+    """
+    Для каждой добавляемой сигнатуры считает, какие страницы job ей
+    достанутся: с первой ещё не занятой страницы — столько страниц,
+    сколько в сигнатуре (но не больше свободных подряд и не дальше
+    последней страницы job). Если свободных страниц нет (или в job
+    вообще нет страниц / неизвестно число страниц сигнатуры) —
+    сигнатура добавляется «пустой», без страниц, как это делает сам
+    Preps (страницы потом назначаются в Preps).
+    Возвращает список {start, end, filled, start_flag, end_flag}
+    (end — исключительная граница), по одному на элемент additions.
+    """
+    total = job["total_pages"]
+    covered = set()
+    for b in job["blocks"]:
+        if b["start"] is not None and b["end"] is not None and b["end"] > b["start"]:
+            covered.update(range(max(b["start"], 1), min(b["end"], total + 1)))
+
+    prev_end = 1
+    if job["blocks"] and job["blocks"][-1]["end"] is not None:
+        prev_end = job["blocks"][-1]["end"]
+
+    plans = []
+    for add in additions:
+        pages = add["sig"].get("pages")
+        start = None
+        if pages and total:
+            p = 1
+            while p <= total and p in covered:
+                p += 1
+            if p <= total:
+                start = p
+        if start is None:
+            plans.append({"start": 1, "end": 1, "filled": False,
+                          "start_flag": 0, "end_flag": 0})
+            prev_end = 1
+            continue
+        end = start
+        while end < start + pages and end <= total and end not in covered:
+            end += 1
+        covered.update(range(start, end))
+        plans.append({"start": start, "end": end, "filled": True,
+                      "start_flag": 1 if start == prev_end else 0, "end_flag": 1})
+        prev_end = end
+    return plans
+
+
+def build_job_edited_content(job: dict, additions: list) -> bytes:
+    """Собирает содержимое job с дописанными сигнатурами. additions —
+    список {"sig": <сигнатура из _parse_tpl_file>, "source_fname": "<имя>.tpl"}."""
+    plans = plan_job_additions(job, additions)
+    eol = job["eol"]
+
+    tail_params = _JOB_DEFAULT_SIGUSED_TAIL
+    for b in reversed(job["blocks"]):
+        if b.get("tail_params") is not None:
+            tail_params = b["tail_params"]
+            break
+
+    new_lines = []
+    seq = job["max_seq"]
+    for add, plan in zip(additions, plans):
+        tpl_name = os.path.splitext(add["source_fname"])[0]
+        sig_name = add["sig"].get("name") or ""
+        if sig_name == "(без имени)":
+            sig_name = ""
+        new_lines.append(f"%SSiSigUsed: '{tpl_name}' '{sig_name}'{tail_params}{eol}")
+        seq += 1
+        new_lines.append(f"%SSiJobDelivery: {plan['start']} {seq} {plan['start_flag']} 0 0{eol}")
+        seq += 1
+        new_lines.append(f"%SSiJobDelivery: {plan['end']} {seq} {plan['end_flag']} 0 0{eol}")
+
+    lines = list(job["head"])
+    for b in job["blocks"]:
+        lines.extend(b["lines"])
+    if lines and not lines[-1].endswith("\n") and (new_lines or job["tail"]):
+        lines[-1] += eol
+    lines.extend(new_lines)
+    lines.extend(job["tail"])
+    return _encode_job_text("".join(lines))
+
+
 class ImpositionPage(ctk.CTkFrame):
     def __init__(self, parent, app, order_id: int = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
@@ -775,6 +975,18 @@ class ImpositionPage(ctk.CTkFrame):
         # чтобы повторный клик по той же сигнатуре закрывал панель.
         self._sig_preview_key = None
 
+        # JOB-файлы в папке заказа (список показывается в панели
+        # «ШАБЛОНЫ PREPS» под критериями заказа, см. _render_job_list).
+        # None — папку ещё не сканировали; перечитывается кнопкой ↺,
+        # после «Создать JOB» и после сохранения правок job.
+        self._job_files = None
+        # Черновик РЕДАКТИРОВАНИЯ существующего JOB (кнопка
+        # «✎ Редактировать» у job-файла): сигнатуры, добавленные из
+        # шаблонов кнопкой «+», но ещё не записанные в файл. Взаимно
+        # исключает _tpl_draft (одна панель черновика на двоих).
+        # None — job не редактируется.
+        self._job_draft = None
+
         if order_id:
             session = get_session()
             try:
@@ -792,7 +1004,8 @@ class ImpositionPage(ctk.CTkFrame):
         # Три панели, как на странице заказа: левая (контролы) —
         # центр (фото/сетка спуска) — правая (шаблоны Preps). Границы
         # можно перетаскивать. Левая панель по умолчанию СКРЫТА —
-        # открывается кнопкой в верхней панели инструментов.
+        # открывается кнопкой-«гамбургером» (☰) в шапке центральной
+        # панели, слева от переключателя «Фото / Сетка».
         self.pack_propagate(False)
         try:
             win_w = self.app.cfg.get("window_width", 1400)
@@ -817,20 +1030,6 @@ class ImpositionPage(ctk.CTkFrame):
 
         is_dark = ctk.get_appearance_mode().lower() == "dark"
         sash_bg = "#242424" if is_dark else "#d5d5d5"
-
-        # ── Верхняя панель инструментов — переключатель сайдбара ──
-        toolbar = ctk.CTkFrame(self, fg_color=("gray85","gray20"), height=32, corner_radius=0)
-        toolbar.pack(fill="x", side="top")
-        toolbar.pack_propagate(False)
-
-        self._sidebar_btn = ctk.CTkButton(
-            toolbar, text="☰  Показать ИИ панель (Beta)", width=180, height=24,
-            font=("JetBrains Mono", 10),
-            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
-            border_width=1,
-            command=self._toggle_sidebar,
-        )
-        self._sidebar_btn.pack(side="left", padx=10, pady=4)
 
         self._paned = tk.PanedWindow(
             self, orient="horizontal", sashwidth=6, sashrelief="flat",
@@ -1041,10 +1240,11 @@ class ImpositionPage(ctk.CTkFrame):
 
     # ── SIDEBAR TOGGLE ───────────────────────────────────────────
     def _toggle_sidebar(self):
+        """Кнопка-«гамбургер» ☰ (в шапке центральной панели): открывает /
+        закрывает левую ИИ-панель (Beta)."""
         if self._sidebar_visible:
             self._paned.forget(self._left_container)
             self._sidebar_visible = False
-            self._sidebar_btn.configure(text="☰  Показать ИИ панель (Beta)")
         else:
             first_pane = self._paned.panes()[0] if self._paned.panes() else None
             if first_pane:
@@ -1058,7 +1258,59 @@ class ImpositionPage(ctk.CTkFrame):
                     minsize=280, stretch="never",
                 )
             self._sidebar_visible = True
-            self._sidebar_btn.configure(text="☰  Скрыть панель")
+        self._update_sidebar_btn()
+
+    def _update_sidebar_btn(self):
+        """У «гамбургера» нет текста — состояние показываем цветом:
+        панель открыта → акцентная заливка, закрыта → обычная серая."""
+        if self._sidebar_visible:
+            self._sidebar_btn.configure(
+                fg_color=ACCENT2, hover_color=ACCENT, text_color="black",
+            )
+        else:
+            self._sidebar_btn.configure(
+                fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
+            )
+
+    def _attach_tooltip(self, widget, text_fn):
+        """Простая всплывающая подсказка под виджетом (у кнопки ☰ нет
+        текста, поэтому подписываем её подсказкой). text_fn — функция,
+        возвращающая актуальный текст на момент показа."""
+        state = {"tip": None}
+
+        def show(_e=None):
+            if state["tip"] is not None:
+                return
+            try:
+                tip = tk.Toplevel(widget)
+                tip.wm_overrideredirect(True)
+                try:
+                    tip.attributes("-topmost", True)
+                except tk.TclError:
+                    pass
+                x = widget.winfo_rootx()
+                y = widget.winfo_rooty() + widget.winfo_height() + 4
+                tip.wm_geometry(f"+{x}+{y}")
+                tk.Label(
+                    tip, text=text_fn(), font=("JetBrains Mono", 9),
+                    bg="#333333", fg="#f0f0f0", padx=6, pady=3,
+                    bd=1, relief="solid",
+                ).pack()
+                state["tip"] = tip
+            except Exception:
+                state["tip"] = None
+
+        def hide(_e=None):
+            tip, state["tip"] = state["tip"], None
+            if tip is not None:
+                try:
+                    tip.destroy()
+                except Exception:
+                    pass
+
+        widget.bind("<Enter>", show, add="+")
+        widget.bind("<Leave>", hide, add="+")
+        widget.bind("<Button-1>", hide, add="+")
 
     # ── ЦЕНТРАЛЬНАЯ ПАНЕЛЬ (фото / сетка) ────────────────────────
     def _build_center(self, parent):
@@ -1069,6 +1321,22 @@ class ImpositionPage(ctk.CTkFrame):
         nav = ctk.CTkFrame(parent, fg_color=("gray85","gray20"), height=36, corner_radius=0)
         nav.grid(row=0, column=0, sticky="ew")
         nav.grid_propagate(False)
+
+        # «Гамбургер» — открыть/закрыть левую ИИ-панель (Beta). Стоит
+        # слева от переключателя «Фото / Сетка», на одном с ним уровне.
+        self._sidebar_btn = ctk.CTkButton(
+            nav, text="☰", width=32, height=26,
+            font=("JetBrains Mono", 16),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
+            border_width=1,
+            command=self._toggle_sidebar,
+        )
+        self._sidebar_btn.pack(side="left", padx=(10, 0), pady=4)
+        self._attach_tooltip(
+            self._sidebar_btn,
+            lambda: "Скрыть ИИ панель (Beta)" if self._sidebar_visible
+                    else "Показать ИИ панель (Beta)",
+        )
 
         self._view_seg = ctk.CTkSegmentedButton(
             nav, values=["📷 Фото", "▦ Сетка"],
@@ -1303,6 +1571,11 @@ class ImpositionPage(ctk.CTkFrame):
         for w in self._draft_frame.winfo_children():
             w.destroy()
 
+        # Редактируется существующий JOB — своя панель (см. ниже).
+        if self._job_draft is not None:
+            self._render_job_draft_bar()
+            return
+
         if self._tpl_draft is None:
             row = ctk.CTkFrame(self._draft_frame, fg_color="transparent")
             row.pack(fill="x", padx=10, pady=(10, 6))
@@ -1324,7 +1597,9 @@ class ImpositionPage(ctk.CTkFrame):
                 self._draft_frame, text=self._order_criteria_text(),
                 font=("JetBrains Mono", 10), text_color=("gray25","gray80"),
                 justify="left", anchor="w", wraplength=280,
-            ).pack(fill="x", padx=10, pady=(0, 10))
+            ).pack(fill="x", padx=10, pady=(0, 4 if self._get_job_files() else 10))
+            # JOB-файлы, найденные в папке заказа (если есть)
+            self._render_job_list(self._draft_frame)
             return
 
         draft = self._tpl_draft
@@ -1459,6 +1734,9 @@ class ImpositionPage(ctk.CTkFrame):
                 return
 
             dlg.destroy()
+            # Новый job должен сразу появиться в списке job-файлов заказа
+            self._rescan_jobs()
+            self._render_draft_bar()
             messagebox.showinfo("Создать JOB", f"JOB-файл создан:\n{dst}")
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -1603,6 +1881,15 @@ class ImpositionPage(ctk.CTkFrame):
         тот же файл (можно сохранить и в другое место — диалог
         сохранения это позволяет). См. п.5.
         """
+        if self._job_draft is not None:
+            if self._job_draft["added"] and not messagebox.askyesno(
+                "Редактировать шаблон",
+                "Есть несохранённые изменения в JOB — они будут\n"
+                "потеряны. Продолжить?"
+            ):
+                return
+            self._job_draft = None
+
         if self._tpl_draft and self._tpl_draft["signatures"]:
             if not messagebox.askyesno(
                 "Редактировать шаблон",
@@ -1631,11 +1918,18 @@ class ImpositionPage(ctk.CTkFrame):
         self._status_lbl.configure(text=f"Редактирование: {fname}", text_color=ACCENT_TEXT)
 
     def _add_signature_to_draft(self, sig: dict, source_fname: str):
+        # Идёт редактирование job — «+» добавляет сигнатуру в него
+        if self._job_draft is not None:
+            self._job_draft["added"].append({"sig": sig, "source_fname": source_fname})
+            self._render_draft_bar()
+            return
         if self._tpl_draft is None:
             messagebox.showinfo(
                 "Добавить в шаблон",
                 "Сначала нажмите «➕ Создать шаблон» вверху панели —\n"
-                "туда и будут добавляться выбранные сигнатуры."
+                "туда и будут добавляться выбранные сигнатуры.\n\n"
+                "Чтобы добавить сигнатуру в существующий JOB, нажмите\n"
+                "«✎ Редактировать» у нужного job-файла."
             )
             return
         self._tpl_draft["signatures"].append({"sig": sig, "source_fname": source_fname})
@@ -1707,6 +2001,287 @@ class ImpositionPage(ctk.CTkFrame):
         # пересканировать кнопкой "🗄 Архив" (кэш архива не трогаем
         # автоматически).
         self._refresh_templates(force=True)
+
+    # ── JOB-ФАЙЛЫ ЗАКАЗА (список + редактирование) ───────────────
+    def _scan_order_jobs(self) -> list:
+        """*.job прямо в папке заказа (туда же «Создать JOB» кладёт
+        файл). Подпапки не обходим — как и Preps, job лежит в корне."""
+        folder = getattr(self.order, "folder_path", None) if self.order else None
+        if not folder or not os.path.isdir(folder):
+            return []
+        jobs = []
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return []
+        for name in names:
+            if not name.lower().endswith(".job"):
+                continue
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                jobs.append({"path": path, "fname": name})
+        jobs.sort(key=lambda j: j["fname"].lower())
+        return jobs
+
+    def _rescan_jobs(self):
+        self._job_files = self._scan_order_jobs()
+
+    def _get_job_files(self) -> list:
+        # Кэш — чтобы не ходить в папку заказа (может быть сетевой) при
+        # каждой перерисовке панели черновика.
+        if self._job_files is None:
+            self._rescan_jobs()
+        return self._job_files
+
+    def _render_job_list(self, parent):
+        """Список job-файлов заказа под критериями заказа. Клик по
+        имени — открыть в Preps, справа кнопка «✎ Редактировать».
+        Если job-файлов нет — ничего не показываем."""
+        jobs = self._get_job_files()
+        if not jobs:
+            return
+
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        box.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkLabel(
+            box, text="JOB-ФАЙЛЫ ЗАКАЗА",
+            font=("JetBrains Mono", 9, "bold"), text_color=("gray25","gray80"), anchor="w",
+        ).pack(fill="x", pady=(0, 3))
+
+        for job in jobs:
+            row = ctk.CTkFrame(box, fg_color=("gray82","gray22"), corner_radius=4)
+            row.pack(fill="x", pady=2)
+
+            # Кнопку пакуем ПЕРВОЙ (side="right") — чтобы длинное имя
+            # файла не вытесняло её за правый край (как и у карточек шаблонов).
+            ctk.CTkButton(
+                row, text="✎ Редактировать", width=120, height=26,
+                font=("JetBrains Mono", 10),
+                fg_color=("gray70","gray30"), hover_color=ACCENT2,
+                text_color=("gray10","white"),
+                command=lambda p=job["path"]: self._edit_job(p),
+            ).pack(side="right", padx=6, pady=4)
+
+            name_lbl = ctk.CTkLabel(
+                row, text=job["fname"],
+                font=ctk.CTkFont("JetBrains Mono", 10, weight="bold", underline=True),
+                text_color=SIG_LINK, justify="left", anchor="w", cursor="hand2",
+                wraplength=150,
+            )
+            name_lbl.pack(side="left", padx=(8, 4), pady=4, fill="x", expand=True)
+            name_lbl.bind("<Button-1>", lambda _e, p=job["path"]: self._open_job(p))
+            name_lbl.bind("<Enter>", lambda _e, w=name_lbl: w.configure(text_color=SIG_LINK_HOVER))
+            name_lbl.bind("<Leave>", lambda _e, w=name_lbl: w.configure(text_color=SIG_LINK))
+
+            # Ширина панели меняется (её можно тянуть) — подгоняем
+            # перенос имени под свободное место рядом с кнопкой.
+            last_wrap = {"v": 150}
+
+            def _fit(e, lbl=name_lbl, st=last_wrap):
+                w = max(90, e.width - 170)
+                if abs(w - st["v"]) >= 4:
+                    st["v"] = w
+                    lbl.configure(wraplength=w)
+
+            row.bind("<Configure>", _fit, add="+")
+
+    def _edit_job(self, path: str):
+        """«✎ Редактировать» у job-файла: загружает job в режим
+        редактирования — дальше кнопка «+» у сигнатур шаблонов
+        добавляет их в этот job (по аналогии с добавлением в шаблон)."""
+        if not os.path.isfile(path):
+            messagebox.showerror("Редактировать JOB", f"Файл не найден:\n{path}")
+            self._rescan_jobs()
+            self._render_draft_bar()
+            return
+
+        pending = []
+        if self._tpl_draft and self._tpl_draft["signatures"]:
+            pending.append("черновик шаблона")
+        if self._job_draft and self._job_draft["added"]:
+            pending.append("несохранённые изменения другого JOB")
+        if pending and not messagebox.askyesno(
+            "Редактировать JOB",
+            "Будут потеряны: " + ", ".join(pending) + ".\nПродолжить?"
+        ):
+            return
+
+        try:
+            job = parse_job_file(path)
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Редактировать JOB", f"Не удалось прочитать файл:\n{e}")
+            return
+
+        self._tpl_draft = None
+        self._job_draft = {
+            "path": path, "fname": os.path.basename(path), "job": job, "added": [],
+        }
+        self._render_draft_bar()
+        self._status_lbl.configure(
+            text=f"Редактирование JOB: {os.path.basename(path)}", text_color=ACCENT_TEXT
+        )
+
+    def _render_job_draft_bar(self):
+        """Панель черновика в режиме редактирования JOB: имя файла,
+        критерии заказа, что уже есть в job, добавленные сигнатуры
+        (с ✕), кнопки «Сохранить»/«Отмена»."""
+        d = self._job_draft
+        job = d["job"]
+        f = self._draft_frame
+
+        ctk.CTkLabel(
+            f, text="РЕДАКТИРОВАНИЕ JOB",
+            font=("JetBrains Mono", 9, "bold"), text_color=("gray25","gray80"), anchor="w",
+        ).pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(
+            f, text=d["fname"],
+            font=("JetBrains Mono", 12, "bold"), text_color=ACCENT_TEXT, anchor="w",
+            wraplength=270, justify="left",
+        ).pack(fill="x", padx=10, pady=(2, 6))
+        ctk.CTkLabel(
+            f, text=self._order_criteria_text(),
+            font=("JetBrains Mono", 10), text_color=("gray25","gray80"),
+            justify="left", anchor="w", wraplength=280,
+        ).pack(fill="x", padx=10, pady=(0, 6))
+
+        # Что уже есть в job
+        counts = {}
+        for b in job["blocks"]:
+            key = b["sig"] or "?"
+            counts[key] = counts.get(key, 0) + 1
+        info = f"Страниц в job: {job['total_pages']} • Сигнатур в job: {len(job['blocks'])}"
+        if counts:
+            info += "\n" + ", ".join(f"{k} ×{v}" if v > 1 else k for k, v in counts.items())
+        ctk.CTkLabel(
+            f, text=info, font=("JetBrains Mono", 10), text_color=("gray30","gray70"),
+            justify="left", anchor="w", wraplength=280,
+        ).pack(fill="x", padx=10, pady=(0, 8))
+
+        added = d["added"]
+        if not added:
+            ctk.CTkLabel(
+                f,
+                text="Разверните шаблон в списке ниже и нажмите «+»\nна нужной сигнатуре — она будет добавлена в этот job.",
+                font=("JetBrains Mono", 10), text_color=("gray30","gray70"),
+                justify="left", anchor="w",
+            ).pack(fill="x", padx=10, pady=(0, 6))
+        else:
+            plans = plan_job_additions(job, added)
+            for i, (item, plan) in enumerate(zip(added, plans)):
+                row = ctk.CTkFrame(f, fg_color=("gray82","gray22"), corner_radius=4)
+                row.pack(fill="x", padx=10, pady=2)
+                if plan["filled"]:
+                    pages_txt = f"стр. {plan['start']}–{plan['end'] - 1}"
+                else:
+                    pages_txt = "без назначенных страниц"
+                ctk.CTkLabel(
+                    row,
+                    text=f"{item['sig']['name'] or '?'}\n{item['source_fname']}\n{pages_txt}",
+                    font=("JetBrains Mono", 10), text_color=("gray20","gray85"),
+                    anchor="w", justify="left", wraplength=210,
+                ).pack(side="left", padx=(8, 4), pady=4, fill="x", expand=True)
+                ctk.CTkButton(
+                    row, text="✕", width=22, height=22,
+                    font=("JetBrains Mono", 10),
+                    fg_color="transparent", hover_color=DANGER, text_color=("gray30","gray80"),
+                    command=lambda idx=i: self._remove_signature_from_job_draft(idx),
+                ).pack(side="right", padx=6, pady=4)
+            if not job["total_pages"]:
+                ctk.CTkLabel(
+                    f, text="В job пока нет страниц — сигнатуры добавятся\nбез страниц, назначьте их в Preps.",
+                    font=("JetBrains Mono", 9), text_color=("gray30","gray70"),
+                    justify="left", anchor="w",
+                ).pack(fill="x", padx=10, pady=(2, 0))
+
+        btns = ctk.CTkFrame(f, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=(4, 10))
+        ctk.CTkButton(
+            btns, text="💾  Сохранить",
+            font=("JetBrains Mono", 11, "bold"),
+            fg_color=ACCENT, hover_color=ACCENT2, text_color="black",
+            text_color_disabled=("gray30", "gray40"),
+            height=30,
+            state="normal" if added else "disabled",
+            command=self._save_job_draft,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            btns, text="Отмена",
+            font=("JetBrains Mono", 11),
+            fg_color=("gray80","gray25"), hover_color=DARK_BD2, text_color=BTN_TEXT,
+            height=30,
+            command=self._cancel_job_draft,
+        ).pack(side="right", fill="x", expand=True, padx=(4, 0))
+
+    def _remove_signature_from_job_draft(self, index: int):
+        if self._job_draft is None:
+            return
+        try:
+            self._job_draft["added"].pop(index)
+        except IndexError:
+            pass
+        self._render_draft_bar()
+
+    def _cancel_job_draft(self):
+        if self._job_draft and self._job_draft["added"]:
+            if not messagebox.askyesno(
+                "Отменить редактирование JOB",
+                "Отменить редактирование? Добавленные сигнатуры будут потеряны."
+            ):
+                return
+        self._job_draft = None
+        self._render_draft_bar()
+
+    def _save_job_draft(self):
+        d = self._job_draft
+        if not d or not d["added"]:
+            return
+
+        save_path = filedialog.asksaveasfilename(
+            title="Сохранить отредактированный JOB Preps",
+            initialdir=os.path.dirname(d["path"]),
+            initialfile=os.path.basename(d["path"]),
+            defaultextension=".job",
+            filetypes=[("JOB Preps", "*.job")],
+        )
+        if not save_path:
+            return
+
+        backup = None
+        try:
+            # Перечитываем job заново: пока шло редактирование, файл
+            # могли изменить в Preps — правки накладываем на свежую версию.
+            job = parse_job_file(d["path"])
+            content = build_job_edited_content(job, d["added"])
+            plans = plan_job_additions(job, d["added"])
+            same = (
+                os.path.exists(save_path)
+                and os.path.samefile(save_path, d["path"])
+            )
+            if same:
+                # Перезапись оригинала — сначала резервная копия
+                # (<имя>.job.bak, хранит версию до последнего сохранения).
+                backup = save_path + ".bak"
+                shutil.copy2(save_path, backup)
+            with open(save_path, "wb") as f:
+                f.write(content)
+        except Exception as e:
+            messagebox.showerror("Сохранить JOB", f"Не удалось сохранить файл:\n{e}")
+            return
+
+        n = len(d["added"])
+        self._job_draft = None
+        self._rescan_jobs()
+        self._render_draft_bar()
+        self._status_lbl.configure(
+            text=f"✓ JOB обновлён: {os.path.basename(save_path)}", text_color=ACCENT_TEXT
+        )
+        lines = [f"JOB сохранён:\n{save_path}", f"\nДобавлено сигнатур: {n}"]
+        empty = sum(1 for p in plans if not p["filled"])
+        if empty:
+            lines.append(f"Из них без страниц: {empty} (назначьте страницы в Preps).")
+        if backup:
+            lines.append(f"\nРезервная копия:\n{backup}")
+        messagebox.showinfo("Сохранить JOB", "\n".join(lines))
 
     def _render_template_signatures(self, container, path: str):
         ctk.CTkLabel(
@@ -1906,6 +2481,11 @@ class ImpositionPage(ctk.CTkFrame):
             return
 
         if force:
+            # Заодно перечитываем job-файлы в папке заказа (список под
+            # критериями заказа, см. _render_job_list).
+            self._rescan_jobs()
+            self._render_draft_bar()
+
             # Принудительное обновление (кнопка ↺) пересканирует
             # быстрые локальные папки (config.preps_templates) —
             # делаем это в фоновом потоке на случай временных
@@ -2040,6 +2620,13 @@ class ImpositionPage(ctk.CTkFrame):
 
     def _open_template(self, path: str):
         """Открывает .tpl шаблон в программе Preps."""
+        self._open_in_preps(path, "шаблон")
+
+    def _open_job(self, path: str):
+        """Открывает .job файл заказа в программе Preps."""
+        self._open_in_preps(path, "job")
+
+    def _open_in_preps(self, path: str, what: str):
         if not os.path.isfile(path):
             messagebox.showerror("Preps", f"Файл не найден:\n{path}")
             return
@@ -2048,10 +2635,10 @@ class ImpositionPage(ctk.CTkFrame):
             if preps_exe and os.path.isfile(preps_exe):
                 subprocess.Popen([preps_exe, path])
             else:
-                # Открываем через ассоциацию файлов Windows (.tpl → Preps)
+                # Открываем через ассоциацию файлов Windows (.tpl/.job → Preps)
                 os.startfile(path)
         except Exception as e:
-            messagebox.showerror("Preps", f"Не удалось открыть шаблон:\n{e}")
+            messagebox.showerror("Preps", f"Не удалось открыть {what}:\n{e}")
 
     def _on_engine_change(self, value):
         if value == "ollama":
