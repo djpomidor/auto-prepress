@@ -742,17 +742,34 @@ def build_new_template_content(base_path: str, new_name_no_ext: str, signatures_
 
 # ── Существующий JOB-файл Preps: разбор и добавление сигнатур ────────
 # Формат .job официально не документирован — разбор основан на
-# анализе реального файла (Preps 5.3.3). Что важно для нас:
+# анализе двух реальных файлов (Preps 5.3.3):
 #   • %SSiJobPage: ...            — страница заказа (сколько страниц в job);
 #   • %SSiSigUsed: 'шаблон' 'сигнатура' ... — «сигнатура из шаблона
-#     использована в job» (имя шаблона — без .tpl). Сразу за ней идут
-#     ДВЕ строки
-#   • %SSiJobDelivery: <стр> <№> <флаг> 0 0 — первая содержит первую
-#     страницу, попавшую в эту сигнатуру, вторая — страницу, с которой
-#     начинается СЛЕДУЮЩАЯ (диапазон «полуоткрытый»: 1 → 33 = стр. 1–32);
-#     <№> — сквозной порядковый номер строки Delivery в файле;
-#   • сигнатуру без назначенных страниц Preps пишет как «1 <№> 0» и
-#     «1 <№+1> 0» (так в примере записаны «3pl …» и «4pl …»).
+#     использована в job» (имя шаблона — без .tpl). Сразу за ней идёт
+#     одна или несколько строк:
+#   • %SSiJobDelivery: <стр> <№> <флаг> <M> <0>
+#       <стр>  — первая страница job, попавшая в этот блок;
+#       <№>    — сквозной порядковый номер строки Delivery в файле;
+#       <флаг> — 1, если <стр> идёт сразу за концом предыдущего блока
+#                (job без «дырки» между сигнатурами), иначе 0;
+#       <M>    — у ОБЫЧНОЙ (однострочной, «Number of sections» = 1 в
+#                шаблоне) сигнатуры здесь всегда 1, и это единственная
+#                Delivery-строка блока: сколько страниц она покрывает,
+#                Preps берёт из числа страниц самой сигнатуры (см.
+#                job "1297_UnderZine" — сигнатура «65x47» из 16 страниц
+#                записана как ОДНА строка «1 1 1 1 0», «17 2 1 1 0» …).
+#                У сигнатуры с несколькими секциями здесь, судя по
+#                более старому примеру ("0641_Comix", "72x104" — но её
+#                .tpl не видели и точное число секций не подтверждено),
+#                может быть 0 и ДВЕ строки — первая содержит первую
+#                страницу блока, вторая — страницу, с которой начинается
+#                СЛЕДУЮЩИЙ блок (диапазон «полуоткрытый»: 1→33 = стр.
+#                1–32). Мы дописываем сигнатуры ТОЛЬКО в однострочном
+#                (обычном, 1 секция) виде — см. build_job_edited_content;
+#                если понадобится многосекционная сигнатура, нужен
+#                реальный пример именно такого job для сверки формата;
+#   • сигнатуру без назначенных страниц (нет свободного места в job)
+#     Preps пишет с <стр>=1 и <флаг>=0 (страницы назначаются в Preps).
 # Всё остальное (шапка, %SSiLaySpecs, %SSiWindowSize, %SSiJobColor …)
 # при правке копируется как есть. Новые блоки дописываются сразу после
 # последнего блока %SSiSigUsed/%SSiJobDelivery.
@@ -761,6 +778,33 @@ _JOB_DELIVERY_RE = re.compile(r"^%SSiJobDelivery:\s+(-?\d+)\s+(\d+)\s+(\d+)\s+(\
 # Хвост строки %SSiSigUsed после двух имён — как у Preps по умолчанию;
 # при правке берём хвост из уже имеющихся в job строк (см. ниже).
 _JOB_DEFAULT_SIGUSED_TAIL = " 0 0 '' '' '' 10.00000 '' '' '' '' '' 0 0"
+
+
+def _build_sig_pages_lookup(order) -> dict:
+    """{(имя_шаблона_без_.tpl, имя_сигнатуры): число_страниц} по всем
+    .tpl, видимым для заказа. Нужен, чтобы при разборе JOB понимать,
+    сколько страниц занимает уже вписанный туда однострочный
+    («1 секция») блок — своей длины %SSiJobDelivery для этого не
+    хранит (в отличие от двухстрочного формата, где вторая строка
+    хранит границу явно, см. комментарий выше)."""
+    lookup = {}
+    try:
+        templates = _scan_preps_templates(order)
+    except Exception:
+        templates = []
+    for tpl in templates:
+        try:
+            _header, sigs = _parse_tpl_file(tpl["path"])
+        except Exception:
+            continue
+        tpl_name = os.path.splitext(tpl["fname"])[0]
+        for sig in sigs:
+            name = sig.get("name") or ""
+            if name == "(без имени)":
+                name = ""
+            if sig.get("pages"):
+                lookup[(tpl_name, name)] = sig["pages"]
+    return lookup
 
 
 def _encode_job_text(text: str) -> bytes:
@@ -784,7 +828,7 @@ def _encode_job_text(text: str) -> bytes:
     return bytes(out)
 
 
-def parse_job_file(path: str) -> dict:
+def parse_job_file(path: str, sig_pages: dict = None) -> dict:
     """
     Разбирает существующий .job на три части:
       head   — всё до первого блока %SSiSigUsed (шапка, страницы, раскладка);
@@ -795,8 +839,18 @@ def parse_job_file(path: str) -> dict:
     %SSiWindowSize/%SSiJobColor. Строки хранятся как есть, с их
     переводами строк, поэтому неизменённое содержимое при сохранении
     не меняется ни на байт.
+
+    sig_pages — {(шаблон, сигнатура): страниц}, см. _build_sig_pages_lookup.
+    Нужен для однострочных блоков (обычная, 1-секционная сигнатура,
+    см. комментарий у _JOB_DELIVERY_RE): у них конец диапазона в файле
+    не хранится явно, а вычисляется как start + число страниц сигнатуры
+    из её .tpl. Без sig_pages такие блоки получают end=None (страницы
+    считаются «неизвестны» и не резервируются под них — это лишь
+    ухудшает точность подбора свободных страниц для НОВЫХ сигнатур,
+    само содержимое job при этом не портится).
     Бросает OSError (нет доступа) или ValueError (не похоже на job).
     """
+    sig_pages = sig_pages or {}
     with open(path, "rb") as f:
         raw = f.read()
     text = raw.decode("cp1251", errors="surrogateescape")
@@ -844,6 +898,11 @@ def parse_job_file(path: str) -> dict:
         for b in blocks:
             if len(b["deliveries"]) == 2:
                 b["start"], b["end"] = b["deliveries"]
+            elif len(b["deliveries"]) == 1:
+                b["start"] = b["deliveries"][0]
+                pages = sig_pages.get((b["tpl"], b["sig"]))
+                if pages:
+                    b["end"] = b["start"] + pages
     else:
         idx = next(
             (i for i, ln in enumerate(lines)
@@ -873,12 +932,24 @@ def plan_job_additions(job: dict, additions: list) -> list:
     total = job["total_pages"]
     covered = set()
     for b in job["blocks"]:
-        if b["start"] is not None and b["end"] is not None and b["end"] > b["start"]:
+        if b["start"] is None:
+            continue
+        if b["end"] is not None and b["end"] > b["start"]:
             covered.update(range(max(b["start"], 1), min(b["end"], total + 1)))
+        else:
+            # Конец диапазона неизвестен (однострочный блок, чья
+            # сигнатура не нашлась среди .tpl заказа — см. sig_pages у
+            # parse_job_file): резервируем хотя бы стартовую страницу,
+            # чтобы новая сигнатура точно не встала поверх неё; это не
+            # спасает от перекрытия остальных её страниц, но безопаснее,
+            # чем считать такой блок полностью свободным.
+            if 1 <= b["start"] <= total:
+                covered.add(b["start"])
 
     prev_end = 1
-    if job["blocks"] and job["blocks"][-1]["end"] is not None:
-        prev_end = job["blocks"][-1]["end"]
+    last = job["blocks"][-1] if job["blocks"] else None
+    if last is not None and last["start"] is not None:
+        prev_end = last["end"] if last["end"] is not None else last["start"] + 1
 
     plans = []
     for add in additions:
@@ -907,7 +978,14 @@ def plan_job_additions(job: dict, additions: list) -> list:
 
 def build_job_edited_content(job: dict, additions: list) -> bytes:
     """Собирает содержимое job с дописанными сигнатурами. additions —
-    список {"sig": <сигнатура из _parse_tpl_file>, "source_fname": "<имя>.tpl"}."""
+    список {"sig": <сигнатура из _parse_tpl_file>, "source_fname": "<имя>.tpl"}.
+
+    Каждая добавляемая сигнатура пишется как ОБЫЧНАЯ, однострочная
+    («Number of sections» = 1 в шаблоне) — одна строка %SSiJobDelivery
+    с флагом «1» в 4-м поле, как в реальном job (см. комментарий у
+    _JOB_DELIVERY_RE). Многосекционные сигнатуры этой функцией пока не
+    поддержаны — для них нужен образец job, где такая сигнатура уже
+    правильно добавлена самим Preps."""
     plans = plan_job_additions(job, additions)
     eol = job["eol"]
 
@@ -926,9 +1004,7 @@ def build_job_edited_content(job: dict, additions: list) -> bytes:
             sig_name = ""
         new_lines.append(f"%SSiSigUsed: '{tpl_name}' '{sig_name}'{tail_params}{eol}")
         seq += 1
-        new_lines.append(f"%SSiJobDelivery: {plan['start']} {seq} {plan['start_flag']} 0 0{eol}")
-        seq += 1
-        new_lines.append(f"%SSiJobDelivery: {plan['end']} {seq} {plan['end_flag']} 0 0{eol}")
+        new_lines.append(f"%SSiJobDelivery: {plan['start']} {seq} {plan['start_flag']} 1 0{eol}")
 
     lines = list(job["head"])
     for b in job["blocks"]:
@@ -2107,7 +2183,7 @@ class ImpositionPage(ctk.CTkFrame):
             return
 
         try:
-            job = parse_job_file(path)
+            job = parse_job_file(path, sig_pages=_build_sig_pages_lookup(self.order))
         except (OSError, ValueError) as e:
             messagebox.showerror("Редактировать JOB", f"Не удалось прочитать файл:\n{e}")
             return
@@ -2250,7 +2326,7 @@ class ImpositionPage(ctk.CTkFrame):
         try:
             # Перечитываем job заново: пока шло редактирование, файл
             # могли изменить в Preps — правки накладываем на свежую версию.
-            job = parse_job_file(d["path"])
+            job = parse_job_file(d["path"], sig_pages=_build_sig_pages_lookup(self.order))
             content = build_job_edited_content(job, d["added"])
             plans = plan_job_additions(job, d["added"])
             same = (
