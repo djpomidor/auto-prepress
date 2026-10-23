@@ -697,12 +697,21 @@ class OrderPage(ctk.CTkFrame):
             cell.grid(row=row, column=col, sticky="ew",
                       padx=(0, 12) if col == 0 else (0, 0), pady=5)
             _label(cell, label).pack(anchor="w")
-            ctk.CTkEntry(
-                cell, textvariable=var,
-                placeholder_text=hint,
-                font=("JetBrains Mono", 13),
-                fg_color=("gray85","gray20"), border_width=1,
-            ).pack(fill="x", pady=(2, 0))
+            if label == "Скрепление":
+                ctk.CTkComboBox(
+                    cell, variable=var,
+                    values=["термоклей", "скрепка", "шитьё", "шитье+термоклей", "фальцовка", "без"],
+                    font=("JetBrains Mono", 13),
+                    dropdown_font=("JetBrains Mono", 13),
+                    fg_color=("gray85","gray20"), border_width=1,
+                ).pack(fill="x", pady=(2, 0))
+            else:
+                ctk.CTkEntry(
+                    cell, textvariable=var,
+                    placeholder_text=hint,
+                    font=("JetBrains Mono", 13),
+                    fg_color=("gray85","gray20"), border_width=1,
+                ).pack(fill="x", pady=(2, 0))
 
         # ── Технические пояснения ──────────────────────────────────
         # Многострочное поле, во всю ширину сайдбара
