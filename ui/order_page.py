@@ -629,7 +629,7 @@ class OrderPage(ctk.CTkFrame):
                 return None
             stem = os.path.splitext(os.path.basename(pdf_path))[0]
             dst_dir = os.path.dirname(pdf_path) if os.path.dirname(pdf_path) else folder_path
-            dst = os.path.join(dst_dir, f"{stem}_preview.jpg")
+            dst = os.path.join(dst_dir, f"{stem}_spec_preview.jpg")
             pages[0].save(dst, "JPEG", quality=90)
             return dst
         except Exception:
@@ -928,7 +928,7 @@ class OrderPage(ctk.CTkFrame):
             candidates = [
                 f for f in os.listdir(root)
                 if f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png"))
-                and not f.endswith("_preview.jpg")
+                and not f.lower().endswith(("_preview.jpg", "_spec_preview.jpg"))
             ]
             if not candidates:
                 return
