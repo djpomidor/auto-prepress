@@ -22,21 +22,30 @@ from collections import defaultdict
 
 def list_pitstop_reports_for_order(order_folder_name: str) -> list:
     """
-    Возвращает ВСЕ отчёты PitStop для заказа — и из pitstop_log
-    (туда попадают проверки С ошибками), и из pitstop_ok (туда
-    PitStop Server кладёт оригинал файла + XML, когда ошибок НЕТ —
-    это отдельная папка, pitstop_log при этом не используется вообще).
-    Объединённый список отсортирован от новых к старым.
+    Возвращает отчёты из локального архива заказа, pitstop_log
+    (проверки с ошибками) и pitstop_ok (проверки без ошибок).
+    Архив проверяется первым, чтобы результаты оставались доступны
+    после очистки временных папок PitStop.
     """
     import config
+    archive_dir = os.path.join(
+        config.CFG.get("orders_root", ""),
+        order_folder_name,
+        "pitstop_log",
+    )
     dirs = [
+        archive_dir,
         os.path.join(config.CFG.get("pitstop_log", ""), order_folder_name),
         os.path.join(config.CFG.get("pitstop_ok", ""),  order_folder_name),
     ]
     reports = []
+    seen = set()
     for d in dirs:
         if d and os.path.isdir(d):
-            reports.extend(list_pitstop_reports(d))
+            for report in list_pitstop_reports(d):
+                if report["fname"] not in seen:
+                    reports.append(report)
+                    seen.add(report["fname"])
     reports.sort(key=lambda r: r["dt"], reverse=True)
     return reports
 

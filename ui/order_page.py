@@ -629,7 +629,7 @@ class OrderPage(ctk.CTkFrame):
                 return None
             stem = os.path.splitext(os.path.basename(pdf_path))[0]
             dst_dir = os.path.dirname(pdf_path) if os.path.dirname(pdf_path) else folder_path
-            dst = os.path.join(dst_dir, f"{stem}_preview.jpg")
+            dst = os.path.join(dst_dir, f"{stem}_spec_preview.jpg")
             pages[0].save(dst, "JPEG", quality=90)
             return dst
         except Exception:
@@ -697,12 +697,21 @@ class OrderPage(ctk.CTkFrame):
             cell.grid(row=row, column=col, sticky="ew",
                       padx=(0, 12) if col == 0 else (0, 0), pady=5)
             _label(cell, label).pack(anchor="w")
-            ctk.CTkEntry(
-                cell, textvariable=var,
-                placeholder_text=hint,
-                font=("JetBrains Mono", 13),
-                fg_color=("gray85","gray20"), border_width=1,
-            ).pack(fill="x", pady=(2, 0))
+            if label == "Скрепление":
+                ctk.CTkComboBox(
+                    cell, variable=var,
+                    values=["термоклей", "скрепка", "шитьё", "шитье+термоклей", "фальцовка", "без"],
+                    font=("JetBrains Mono", 13),
+                    dropdown_font=("JetBrains Mono", 13),
+                    fg_color=("gray85","gray20"), border_width=1,
+                ).pack(fill="x", pady=(2, 0))
+            else:
+                ctk.CTkEntry(
+                    cell, textvariable=var,
+                    placeholder_text=hint,
+                    font=("JetBrains Mono", 13),
+                    fg_color=("gray85","gray20"), border_width=1,
+                ).pack(fill="x", pady=(2, 0))
 
         # ── Технические пояснения ──────────────────────────────────
         # Многострочное поле, во всю ширину сайдбара
@@ -919,7 +928,7 @@ class OrderPage(ctk.CTkFrame):
             candidates = [
                 f for f in os.listdir(root)
                 if f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png"))
-                and not f.endswith("_preview.jpg")
+                and not f.lower().endswith(("_preview.jpg", "_spec_preview.jpg"))
             ]
             if not candidates:
                 return

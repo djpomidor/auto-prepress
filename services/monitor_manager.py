@@ -18,6 +18,7 @@ class MonitorManager:
             cls._instance = super().__new__(cls)
             cls._instance._monitors = {}  # order_id → FolderMonitor
             cls._instance._refine_router = None
+            cls._instance._pitstop_log_archiver = None
         return cls._instance
 
     def start_all(self, callback: Callable = None):
@@ -27,6 +28,7 @@ class MonitorManager:
         файлы по всем заказам сразу, независимо от их тумблера
         "Мониторинг")."""
         self.start_refine_router()
+        self.start_pitstop_log_archiver()
 
         from db.database import get_session
         from db.models import Order
@@ -66,6 +68,23 @@ class MonitorManager:
             self._refine_router = None
             log.info("RefineRouter остановлен")
 
+    def start_pitstop_log_archiver(self):
+        """Архивирует отчёты из общей папки PitStop в папки заказов."""
+        if self._pitstop_log_archiver is not None:
+            return
+        from services.folder_monitor import PitStopLogArchiver
+        try:
+            archiver = PitStopLogArchiver()
+            archiver.start()
+            self._pitstop_log_archiver = archiver
+        except Exception as e:
+            log.error(f"Ошибка запуска PitStopLogArchiver: {e}")
+
+    def stop_pitstop_log_archiver(self):
+        if self._pitstop_log_archiver:
+            self._pitstop_log_archiver.stop()
+            self._pitstop_log_archiver = None
+
     def start_order(self, order_id: int, folder_path: str,
                     callback: Callable = None):
         """Запускает мониторинг одного заказа."""
@@ -104,6 +123,7 @@ class MonitorManager:
             monitor.stop()
         self._monitors.clear()
         self.stop_refine_router()
+        self.stop_pitstop_log_archiver()
         log.info("Все мониторы остановлены")
 
     def is_running(self, order_id: int) -> bool:

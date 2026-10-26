@@ -581,3 +581,141 @@ class RefineRouter:
             log.error(f"RefineRouter: ошибка маршрутизации {fname}: {e}")
         finally:
             self._processing.discard(fname)
+
+
+class PitStopLogArchiver:
+    """Копирует XML-отчёты PitStop и связанные PDF в папку заказа."""
+
+    def __init__(self):
+        import config
+
+        self.source_dir = (config.CFG.get("pitstop_log") or "").strip()
+        self.orders_root = (config.CFG.get("orders_root") or "").strip()
+        self._observer = None
+        self._processing = set()
+        self._lock = threading.Lock()
+
+    def start(self):
+        if not self.source_dir or not self.orders_root:
+            log.warning("PitStopLogArchiver: pitstop_log или orders_root не задан")
+            return
+
+        parent_dir = os.path.dirname(self.source_dir.rstrip("\\/"))
+        if not os.path.isdir(parent_dir):
+            log.warning(f"PitStopLogArchiver: папка PitStop не найдена: {parent_dir}")
+            return
+
+        try:
+            from watchdog.observers.polling import PollingObserver
+            from watchdog.events import FileSystemEventHandler
+        except ImportError:
+            raise RuntimeError("pip install watchdog")
+
+        archiver = self
+
+        class Handler(FileSystemEventHandler):
+            def on_created(self, event):
+                archiver._on_fs_event(event.src_path)
+
+            def on_modified(self, event):
+                archiver._on_fs_event(event.src_path)
+
+            def on_moved(self, event):
+                archiver._on_fs_event(event.dest_path)
+
+        self._observer = PollingObserver(timeout=5)
+        self._observer.schedule(Handler(), parent_dir, recursive=True)
+        self._observer.start()
+        log.info(f"PitStopLogArchiver запущен: {self.source_dir}")
+        self._process_existing()
+
+    def stop(self):
+        if self._observer:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
+            log.info("PitStopLogArchiver остановлен")
+
+    def _process_existing(self):
+        if not os.path.isdir(self.source_dir):
+            return
+        for dirpath, _dirnames, filenames in os.walk(self.source_dir):
+            for fname in filenames:
+                self._on_fs_event(os.path.join(dirpath, fname))
+
+    def _on_fs_event(self, path: str):
+        if not path.lower().endswith((".xml", ".pdf")):
+            return
+        try:
+            source_root = os.path.abspath(self.source_dir)
+            path = os.path.abspath(path)
+            common = os.path.commonpath((source_root, path))
+            if os.path.normcase(common) != os.path.normcase(source_root):
+                return
+            relative = os.path.relpath(path, source_root)
+        except ValueError:
+            return
+
+        parts = relative.split(os.sep)
+        if len(parts) != 2 or parts[0] in ("", ".", ".."):
+            return
+
+        order_name = parts[0]
+        order_dir = os.path.join(self.orders_root, order_name)
+        if not os.path.isdir(order_dir):
+            return
+
+        destination_dir = os.path.join(order_dir, "pitstop_log")
+        destination = os.path.join(destination_dir, parts[1])
+        with self._lock:
+            if destination in self._processing:
+                return
+            self._processing.add(destination)
+        threading.Thread(
+            target=self._archive_file,
+            args=(path, destination_dir, destination),
+            daemon=True,
+        ).start()
+
+    def _archive_file(self, source: str, destination_dir: str, destination: str):
+        temp_path = destination + ".tmp"
+        try:
+            previous_signature = None
+            stable_checks = 0
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                try:
+                    stat = os.stat(source)
+                except OSError:
+                    if not os.path.exists(source):
+                        log.warning(f"PitStopLogArchiver: исходный файл удалён до копирования: {source}")
+                        return
+                    time.sleep(1)
+                    continue
+                signature = (stat.st_size, stat.st_mtime_ns)
+                if stat.st_size > 0 and signature == previous_signature:
+                    stable_checks += 1
+                    if stable_checks >= 2:
+                        break
+                else:
+                    stable_checks = 0
+                previous_signature = signature
+                time.sleep(1)
+            else:
+                log.warning(f"PitStopLogArchiver: файл не стабилизировался: {source}")
+                return
+
+            os.makedirs(destination_dir, exist_ok=True)
+            shutil.copy2(source, temp_path)
+            os.replace(temp_path, destination)
+            log.info(f"Архивирован лог PitStop: {source} → {destination}")
+        except Exception as e:
+            log.error(f"PitStopLogArchiver: не удалось скопировать {source}: {e}")
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError as e:
+                    log.error(f"PitStopLogArchiver: не удалось удалить {temp_path}: {e}")
+            with self._lock:
+                self._processing.discard(destination)
