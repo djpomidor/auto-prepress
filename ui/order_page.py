@@ -852,34 +852,63 @@ class OrderPage(ctk.CTkFrame):
             report_lines = rep["text"].splitlines()
             if report_lines and report_lines[0].startswith("📄  "):
                 report_lines = report_lines[2:]
+
+            active_status_color = None
             for line in report_lines:
+                header_bold = False
+                if line.startswith("🔴"):
+                    active_status_color = DANGER
+                    color = DANGER
+                    if "ОШИБКИ" in line or "Ошибки" in line:
+                        header_bold = True
+                elif line.startswith("✅"):
+                    active_status_color = SUCCESS
+                    color = SUCCESS
+                    if "Ошибок" in line:
+                        header_bold = True
+                elif line.startswith("⚠️"):
+                    active_status_color = WARNING
+                    color = WARNING
+                    if "ПРЕДУПРЕЖДЕНИЯ" in line or "Предупреждения" in line:
+                        header_bold = True
+                elif line.startswith("📐"):
+                    active_status_color = None
+                    color = BTN_TEXT
+                elif active_status_color is not None and not line.startswith("   ") and "  →  стр. " not in line:
+                    color = active_status_color
+                else:
+                    active_status_color = None
+                    color = BTN_TEXT
+
                 prefix, marker, page_list = line.partition("  →  стр. ")
                 if marker and prefix.startswith("   "):
                     size = prefix.strip()
                     row = ctk.CTkFrame(body, fg_color="transparent")
                     row.pack(fill="x", pady=1)
                     ctk.CTkLabel(
-                        row, text="   ", font=("JetBrains Mono", 13),
-                        text_color=BTN_TEXT, anchor="w",
+                        row, text="   ", font=("JetBrains Mono", 13, "bold" if header_bold else "normal"),
+                        text_color=color, anchor="w",
                     ).pack(side="left")
                     ctk.CTkLabel(
                         row, text=size, font=("JetBrains Mono", 13, "bold"),
-                        text_color=BTN_TEXT, anchor="w",
+                        text_color=color, anchor="w",
                     ).pack(side="left")
                     ctk.CTkLabel(
-                        row, text=marker, font=("JetBrains Mono", 13),
-                        text_color=BTN_TEXT, anchor="w",
+                        row, text=marker, font=("JetBrains Mono", 13, "bold" if header_bold else "normal"),
+                        text_color=color, anchor="w",
                     ).pack(side="left")
                     ctk.CTkLabel(
                         row, text=page_list, font=("JetBrains Mono", 13, "bold"),
-                        text_color=BTN_TEXT, anchor="w", wraplength=320,
+                        text_color=color, anchor="w", wraplength=320,
                     ).pack(side="left")
                 else:
-                    ctk.CTkLabel(
-                        body, text=line or " ", font=("JetBrains Mono", 13),
-                        text_color=BTN_TEXT, justify="left", anchor="w",
+                    font_family = "Segoe UI" if line.startswith(("🔴", "✅", "⚠️")) else "JetBrains Mono"
+                    label = ctk.CTkLabel(
+                        body, text=line or " ", font=(font_family, 13, "bold" if header_bold else "normal"),
+                        text_color=color, justify="left", anchor="w",
                         wraplength=320,
-                    ).pack(fill="x", pady=1)
+                    )
+                    label.pack(fill="x", pady=1)
 
     def _open_in_acrobat(self, pdf_path: str):
         import subprocess
