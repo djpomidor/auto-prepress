@@ -44,6 +44,7 @@ class App(ctk.CTk):
         threading.Thread(target=_start_monitors, daemon=True).start()
 
         self.show_orders()
+        self.after(0, self.state, "zoomed")
 
     def _build_header(self):
         header = ctk.CTkFrame(self, corner_radius=0, height=48)
