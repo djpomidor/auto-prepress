@@ -23,7 +23,7 @@
   "prinergy_refine_out": "P:\\_PrinergyRefined\\Вывод",
   "ollama_url": "http://localhost:11434/api/generate",
   "ollama_model": "qwen2.5vl:7b",
-  "theme": "dark",
+  "theme": "light",
   "window_width": 1400,
   "window_height": 860,
   "db_path": "D:\\JJ_docs\\projects\\auto-prepress\\impo_reader.db"

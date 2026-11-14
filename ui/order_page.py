@@ -841,11 +841,36 @@ class OrderPage(ctk.CTkFrame):
                 link.pack(anchor="w", padx=10, pady=(0, 6))
                 link.bind("<Button-1>", lambda e, p=rep["pdf_path"]: self._open_in_acrobat(p))
 
-            body = ctk.CTkLabel(
-                block, text=rep["text"], font=("JetBrains Mono", 13),
-                text_color=BTN_TEXT, justify="left", anchor="w", wraplength=320,
-            )
+            body = ctk.CTkFrame(block, fg_color="transparent")
             body.pack(fill="x", padx=10, pady=(0, 12))
+            for line in rep["text"].splitlines():
+                prefix, marker, page_list = line.partition("  →  стр. ")
+                if marker and prefix.startswith("   "):
+                    size = prefix.strip()
+                    row = ctk.CTkFrame(body, fg_color="transparent")
+                    row.pack(fill="x")
+                    ctk.CTkLabel(
+                        row, text="   ", font=("JetBrains Mono", 13),
+                        text_color=BTN_TEXT, anchor="w",
+                    ).pack(side="left")
+                    ctk.CTkLabel(
+                        row, text=size, font=("JetBrains Mono", 13, "bold"),
+                        text_color=BTN_TEXT, anchor="w",
+                    ).pack(side="left")
+                    ctk.CTkLabel(
+                        row, text=marker, font=("JetBrains Mono", 13),
+                        text_color=BTN_TEXT, anchor="w",
+                    ).pack(side="left")
+                    ctk.CTkLabel(
+                        row, text=page_list, font=("JetBrains Mono", 13, "bold"),
+                        text_color=BTN_TEXT, anchor="w", wraplength=320,
+                    ).pack(side="left")
+                else:
+                    ctk.CTkLabel(
+                        body, text=line or " ", font=("JetBrains Mono", 13),
+                        text_color=BTN_TEXT, justify="left", anchor="w",
+                        wraplength=320,
+                    ).pack(fill="x")
 
     def _open_in_acrobat(self, pdf_path: str):
         import subprocess
