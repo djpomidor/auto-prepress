@@ -183,7 +183,7 @@ def _parse_enfocus_xml(path: str, fname: str) -> str:
         n_warn = report.get("warnings",         "?")
         n_crit = report.get("criticalfailures", "0")
         lines.append(f"Ошибок: {n_err}   Предупреждений: {n_warn}   Критических: {n_crit}")
-        lines.append("")
+        # lines.append("")
 
     # ── Формат страниц (из PageInfo или PageGeometry) ─────────────
     page_sizes = _extract_page_sizes(root)
@@ -192,7 +192,7 @@ def _parse_enfocus_xml(path: str, fname: str) -> str:
         for size_str, pages in page_sizes.items():
             pg_list = _format_page_list(pages)
             lines.append(f"   {size_str}  →  стр. {pg_list}")
-        lines.append("")
+        # lines.append("")
 
     # ── Ошибки ────────────────────────────────────────────────────
     errors = root.findall(".//Errors/PreflightReportItem")
@@ -200,14 +200,14 @@ def _parse_enfocus_xml(path: str, fname: str) -> str:
         lines.append(f"🔴 ОШИБКИ ({len(errors)}):")
         for item in errors:
             lines.append(_format_item(item))
-        lines.append("")
+        # lines.append("")
     else:
         # Проверяем атрибут errors= в заголовке
         if report is not None and report.get("errors", "0") != "0":
             lines.append("🔴 Ошибки найдены (детали не распарсены)")
         else:
             lines.append("✅ Ошибок не найдено")
-        lines.append("")
+        # lines.append("")
 
     # ── Предупреждения ────────────────────────────────────────────
     warnings = root.findall(".//Warnings/PreflightReportItem")

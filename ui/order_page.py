@@ -821,16 +821,22 @@ class OrderPage(ctk.CTkFrame):
 
             top = ctk.CTkFrame(block, fg_color="transparent")
             top.pack(fill="x", padx=10, pady=(10, 4))
+            top.grid_columnconfigure(0, weight=1)
 
             status_color = DANGER if rep["errors"] else (WARNING if rep["warnings"] else SUCCESS)
+            pdf_stem = os.path.splitext(rep["fname"])[0]
+            if pdf_stem.lower().endswith("_log"):
+                pdf_stem = pdf_stem[:-4]
+            pdf_name = pdf_stem + ".pdf"
+            ctk.CTkLabel(
+                top, text=pdf_name, font=("JetBrains Mono", 12, "bold"),
+                text_color=status_color, anchor="w", justify="left", wraplength=220,
+            ).grid(row=0, column=0, sticky="w")
             ctk.CTkLabel(
                 top, text=rep["dt"].strftime("%d.%m.%Y  %H:%M:%S"),
-                font=("JetBrains Mono", 15, "bold"), text_color=status_color,
-                anchor="w",
-            ).pack(side="left")
-
-            # Имя файла (rep["fname"]) здесь больше не дублируем — оно
-            # и так показывается строчкой ниже.
+                font=("JetBrains Mono", 12, "bold"), text_color=status_color,
+                anchor="e", justify="right",
+            ).grid(row=0, column=1, sticky="e")
 
             if rep["pdf_path"]:
                 link = ctk.CTkLabel(
@@ -842,13 +848,16 @@ class OrderPage(ctk.CTkFrame):
                 link.bind("<Button-1>", lambda e, p=rep["pdf_path"]: self._open_in_acrobat(p))
 
             body = ctk.CTkFrame(block, fg_color="transparent")
-            body.pack(fill="x", padx=10, pady=(0, 12))
-            for line in rep["text"].splitlines():
+            body.pack(fill="x", padx=10, pady=(0, 8))
+            report_lines = rep["text"].splitlines()
+            if report_lines and report_lines[0].startswith("📄  "):
+                report_lines = report_lines[2:]
+            for line in report_lines:
                 prefix, marker, page_list = line.partition("  →  стр. ")
                 if marker and prefix.startswith("   "):
                     size = prefix.strip()
                     row = ctk.CTkFrame(body, fg_color="transparent")
-                    row.pack(fill="x")
+                    row.pack(fill="x", pady=1)
                     ctk.CTkLabel(
                         row, text="   ", font=("JetBrains Mono", 13),
                         text_color=BTN_TEXT, anchor="w",
@@ -870,7 +879,7 @@ class OrderPage(ctk.CTkFrame):
                         body, text=line or " ", font=("JetBrains Mono", 13),
                         text_color=BTN_TEXT, justify="left", anchor="w",
                         wraplength=320,
-                    ).pack(fill="x")
+                    ).pack(fill="x", pady=1)
 
     def _open_in_acrobat(self, pdf_path: str):
         import subprocess
