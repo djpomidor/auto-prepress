@@ -86,7 +86,7 @@ class App(ctk.CTk):
         ).pack(side="right")
 
     def _build_breadcrumb(self):
-        self.bc_frame = ctk.CTkFrame(self, corner_radius=0, height=30)
+        self.bc_frame = ctk.CTkFrame(self, corner_radius=0, height=38)
         self.bc_frame.pack(fill="x", side="top")
         self.bc_frame.pack_propagate(False)
 
@@ -96,21 +96,21 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             self.bc_frame, text="  ⌂",
-            font=("JetBrains Mono", 12),
-        ).pack(side="left", padx=(8, 0))
+            font=("Segoe UI Symbol", 16),
+        ).pack(side="left", padx=(10, 4))
 
         for i, (label, fn) in enumerate(crumbs):
             if i > 0:
                 ctk.CTkLabel(
                     self.bc_frame, text=" › ",
-                    font=("JetBrains Mono", 11),
-                ).pack(side="left")
+                    font=("JetBrains Mono", 14, "bold"),
+                ).pack(side="left", padx=4)
             lbl = ctk.CTkLabel(
                 self.bc_frame, text=label,
-                font=("JetBrains Mono", 11),
+                font=("JetBrains Mono", 13, "bold"),
                 cursor="hand2" if fn else "arrow",
             )
-            lbl.pack(side="left")
+            lbl.pack(side="left", padx=(0, 4))
             if fn:
                 lbl.bind("<Button-1>", lambda e, f=fn: f())
 
@@ -127,7 +127,7 @@ class App(ctk.CTk):
 
     def show_order(self, order_id=None, order_number=None):
         if order_number:
-            label = f"Заказ №{order_number:04d}"
+            label = f"Заказ {order_number:04d}"
         elif order_id:
             label = f"Заказ #{order_id}"
         else:
@@ -143,7 +143,7 @@ class App(ctk.CTk):
 
     def show_imposition(self, order_id: int, order_number: int = None):
         if order_number:
-            order_label = f"Заказ №{order_number:04d}"
+            order_label = f"Заказ {order_number:04d}"
         else:
             order_label = f"Заказ #{order_id}"
         self._show_page(
