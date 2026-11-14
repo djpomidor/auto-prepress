@@ -1414,14 +1414,14 @@ class ImpositionPage(ctk.CTkFrame):
                     else "Показать ИИ панель (Beta)",
         )
 
-        self._view_seg = ctk.CTkSegmentedButton(
-            nav, values=["📷 Фото", "▦ Сетка"],
-            font=("JetBrains Mono", 10),
-            selected_color=ACCENT2, unselected_color=DARK_SF2,
-            command=self._on_view_change,
-        )
-        self._view_seg.set("📷 Фото")
-        self._view_seg.pack(side="left", padx=10, pady=4)
+        # self._view_seg = ctk.CTkSegmentedButton(
+        #     nav, values=["📷 Фото", "▦ Сетка"],
+        #     font=("JetBrains Mono", 10),
+        #     selected_color=ACCENT2, unselected_color=DARK_SF2,
+        #     command=self._on_view_change,
+        # )
+        # self._view_seg.set("📷 Фото")
+        # self._view_seg.pack(side="left", padx=10, pady=4)
 
         # Управление зумом (актуально только для вида "Фото")
         self._zoom_box = ctk.CTkFrame(nav, fg_color="transparent")
@@ -2823,7 +2823,8 @@ class ImpositionPage(ctk.CTkFrame):
         self._preview_pil_image = img
         self._preview_zoom = _DEFAULT_PREVIEW_ZOOM
         self._render_preview()
-        self._view_seg.set("📷 Фото")
+        if hasattr(self, "_view_seg"):
+            self._view_seg.set("📷 Фото")
         self._on_view_change("📷 Фото")
 
         self._photo_status_lbl.configure(
@@ -2881,7 +2882,8 @@ class ImpositionPage(ctk.CTkFrame):
             if sheets:
                 self._sheets = sheets
                 self._render_grid()
-                self._view_seg.set("▦ Сетка")
+                if hasattr(self, "_view_seg"):
+                    self._view_seg.set("▦ Сетка")
                 self._on_view_change("▦ Сетка")
                 self._status_lbl.configure(text="Загружен сохранённый спуск")
 
@@ -3024,7 +3026,7 @@ class ImpositionPage(ctk.CTkFrame):
 
         if hasattr(self, "_view_seg"):
             self._view_seg.set("▦ Сетка")
-            self._on_view_change("▦ Сетка")
+        self._on_view_change("▦ Сетка")
 
         for si, sheet in enumerate(self._sheets):
             # Заголовок листа
